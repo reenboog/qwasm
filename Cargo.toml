@@ -2,6 +2,7 @@
 name = "qwasm"
 version = "0.1.0"
 edition = "2021"
+description = "a wasm playground"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -10,6 +11,30 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wasm-bindgen = "0.2.78"
+
+# crypto
+sha2 = { version = "0.10" }
+hmac = { version = "0.12.1" }
+rust-argon2 = { version = "1.0" }
+
+# 448 ec
+x448 = { version = "0.6" }
+# TODO: move to our own bitbucket repo?
+ed448-rust = { git = "https://github.com/reenboog/ed448-rust", branch = "master" }
+
+# aes gcm
+ring = { version = "0.16.20" }
+
+# randomness
+rand = { version = "0.8.5" }
+# rand-07 = { package = "rand", version = "0.7.0" }
+getrandom = { version = "0.2.14", features = ["js"] }
+
+# encoding
+hex = { version = "0.4.3" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = { version = "0.13" }
 
 [profile.release]
 opt-level = 'z'  # Optimize for size
