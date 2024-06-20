@@ -1,10 +1,8 @@
-
+// FIXME: make all objects implement `free`
 // TODO: use web_sys for storage and network?
 
-super_admin_signup
+god_signup
 	gen_identity: enc & sig (priv + pub)
-	gen_seeds
-	enc_seeds_with_pub_identity
 	enc_priv_identity_with_pass
 
 create_new_admin
@@ -14,12 +12,12 @@ create_new_admin
 new_admin_signup
 	gen_identity: priv + pub
 	decrypt_seeds_with_tmp_pass
-	enc_seeds_with_pub_identity // protect from lower admins messing up with my access level?
+	enc_seeds_with_pub_identity
 	enc_priv_identity_with_pass
 
 
 announcements
-id, ts, encrypted_text, sig?, salt,
+id, ts, encrypted_text { ct, salt }, sig?
 
 users
 // devices?

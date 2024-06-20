@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::*;
 
 use crate::{
 	aes_gcm,
@@ -8,27 +7,23 @@ use crate::{
 	x448::{dh_exchange, KeyPairX448, PrivateKeyX448, PublicKeyX448},
 };
 
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Identity {
 	pub(crate) _priv: Private,
 	pub(crate) _pub: Public,
 }
 
-// #[wasm_bindgen]
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Private {
 	pub(crate) x448: PrivateKeyX448,
 	pub(crate) ed448: PrivateKeyEd448,
 }
 
-#[wasm_bindgen]
 #[derive(Debug)]
 pub enum Error {
 	BadKey,
 }
 
-// #[wasm_bindgen]
 impl Private {
 	pub fn decrypt(&self, encrypted: &Encrypted) -> Result<Vec<u8>, Error> {
 		let aes = aes_from_dh_keys(&self.x448, &encrypted.eph_x448);
@@ -38,25 +33,17 @@ impl Private {
 	}
 
 	pub fn sign(&self, msg: &[u8]) -> Signature {
-		todo!()
+		self.ed448.sign(msg)
 	}
 }
 
-// do I need this to be wasm-visible?
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Public {
 	// can be used to encrypt messages to or verify signatures against
-	x448: PublicKeyX448,
-	ed448: PublicKeyEd448,
+	pub(crate) x448: PublicKeyX448,
+	pub(crate) ed448: PublicKeyEd448,
 }
 
-// #[wasm_bindgen]
-// pub struct Decrypted {
-// 	//
-// }
-
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Encrypted {
 	// encrypted message
@@ -73,13 +60,12 @@ fn aes_from_dh_keys(sk: &PrivateKeyX448, pk: &PublicKeyX448) -> aes_gcm::Aes {
 	aes_gcm::Aes::try_from(key_iv.as_slice()).unwrap()
 }
 
-#[wasm_bindgen]
 impl Public {
 	pub fn id(&self) -> u64 {
 		id::from_bytes(&[self.x448.as_bytes(), self.ed448.as_bytes().as_slice()].concat())
 	}
 
-	pub fn encrypt(&self, pt: &[u8]) -> Encrypted {
+	pub fn encrypt_serialized(&self, pt: &[u8]) -> Encrypted {
 		let kp = KeyPairX448::generate();
 		let aes = aes_from_dh_keys(kp.private_key(), &self.x448);
 		let ct = aes.encrypt(pt);
@@ -91,11 +77,21 @@ impl Public {
 	}
 
 	pub fn verify(&self, sig: &Signature, msg: &[u8]) -> bool {
-		todo!()
+		self.ed448.verify(msg, sig)
 	}
 }
 
-#[wasm_bindgen]
+impl Public {
+	pub fn encrypt<T>(&self, pt: T) -> Encrypted
+	where
+		T: Serialize,
+	{
+		let serialized = serde_json::to_vec(&pt).unwrap();
+
+		self.encrypt_serialized(&serialized)
+	}
+}
+
 impl Identity {
 	// should be explicitly called by js to please the gc gods
 	pub fn free(self) {}
@@ -140,15 +136,10 @@ mod tests {
 	use super::Identity;
 
 	#[test]
-	fn test_generate() {
-		//
-	}
-
-	#[test]
 	fn test_encrypt_decrypt() {
 		let ident = Identity::generate();
 		let msg = b"hi there";
-		let encrypted = ident.public().encrypt(msg);
+		let encrypted = ident.public().encrypt_serialized(msg);
 		let decrypted = ident.private().decrypt(&encrypted).unwrap();
 
 		assert_eq!(decrypted, msg);
@@ -156,14 +147,18 @@ mod tests {
 
 	#[test]
 	fn test_sign_verify() {
-		//
+		let ident = Identity::generate();
+		let msg = b"hi there";
+		let sig = ident.private().sign(msg);
+
+		assert!(ident.public().verify(&sig, msg));
 	}
 
 	#[test]
 	fn test_serialize_deserialized() {
 		let ident = Identity::generate();
-		let serialized = serde_json::to_string(&ident).unwrap();
-		let deserialized = serde_json::from_str(&serialized).unwrap();
+		let serialized = serde_json::to_vec(&ident).unwrap();
+		let deserialized = serde_json::from_slice(&serialized).unwrap();
 
 		assert_eq!(ident, deserialized);
 	}

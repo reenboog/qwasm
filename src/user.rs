@@ -3,43 +3,73 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::{
 	hkdf,
-	identity::{self, Identity},
+	identity::Identity,
 	password_lock,
-	seeds::{self, Seed},
+	seeds::{self, Bundle, Invite, Seed, Share},
 };
 
-pub trait RoleName {
-	fn role_name() -> String;
+pub enum Error {
+	UnknownRole,
+	BadJson,
+	WrongPass,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct God;
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub enum Role {
+	Admin,
+	God,
+}
 
-impl RoleName for God {
-	fn role_name() -> String {
-		"god".to_string()
+impl ToString for Role {
+	fn to_string(&self) -> String {
+		match self {
+			Role::Admin => "admin",
+			Role::God => "god",
+		}
+		.to_string()
 	}
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Admin {
-	seeds: seeds::Bundle,
-}
+impl TryFrom<&str> for Role {
+	type Error = Error;
 
-impl RoleName for Admin {
-	fn role_name() -> String {
-		"admin".to_string()
+	fn try_from(s: &str) -> Result<Self, Self::Error> {
+		match s {
+			"god" => Ok(Self::God),
+			"admin" => Ok(Self::Admin),
+			_ => Err(Error::UnknownRole),
+		}
 	}
 }
 
-// FIXME: add version?
-pub struct User<Role> {
-	pub identity: Identity,
-	role: Role,
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct User {
+	pub(crate) identity: Identity,
+	// or rather a list of Bundles actually?
+	pub(crate) shares: Vec<Share>,
+	pub(crate) role: Role,
 }
 
-impl User<God> {
-	fn seed_with_label(&self, label: &[u8]) -> Seed {
+impl User {
+	fn seeds_for_ids(&self, _fs_ids: &[u64], _db_ids: &[u64]) -> Bundle {
+		match self.role {
+			Role::God => {
+				// FIXME: for now, everybody would have access to the very root seeds
+				let mut bundle = Bundle::new();
+
+				bundle.set_db(0, self.db_seed());
+				bundle.set_fs(0, self.fs_seed());
+
+				bundle
+			}
+			Role::Admin => {
+				// FIXME: for now, there will only be one share
+				self.shares.get(0).unwrap().bundle.clone()
+			}
+		}
+	}
+
+	fn derive_seed_with_label(&self, label: &[u8]) -> Seed {
 		let identity = self.identity.private();
 		// hash identity's private keys to "root"
 		let root = hkdf::Hkdf::from_ikm(
@@ -57,60 +87,47 @@ impl User<God> {
 	}
 
 	pub fn db_seed(&self) -> Seed {
-		self.seed_with_label(b"db")
+		self.derive_seed_with_label(b"db")
 	}
 
 	pub fn fs_seed(&self) -> Seed {
-		self.seed_with_label(b"fs")
+		self.derive_seed_with_label(b"fs")
+	}
+
+	// pin is just a password used to encrypt the seeds, if any
+	// at this point, all we know is an email address and the seeds
+	fn share_seeds_with_params(
+		&self,
+		pin: &str,
+		fs_ids: &[u64],
+		db_ids: &[u64],
+		email: &str,
+	) -> Vec<u8> {
+		let bundle = self.seeds_for_ids(fs_ids, db_ids);
+		let payload = password_lock::lock(bundle, pin).unwrap();
+		let invite = Invite {
+			sender: self.identity.public().clone(),
+			email: email.to_string(),
+			payload,
+		};
+
+		let serialized = serde_json::to_vec(&invite).unwrap();
+
+		serialized
 	}
 }
 
-// FIXME: as described here https://www.youtube.com/watch?v=NDIU1GSBrVI&ab_channel=Let%27sGetRusty,
-// define two Roles – Super and Admin; Super would have methods to get fs & db seeds from its private keys
-// while Admin would have methods to accept (and initiate) share
-
-impl<Role> serde::Serialize for User<Role> {
-	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-		// serializer.serialize_str(&base64::encode(self.bytes))
-		todo!()
+impl User {
+	// export all root seeds; returns json-serialized Invite
+	pub fn export_seeds_encrypted(&self, pin: &str, email: &str) -> Vec<u8> {
+		self.share_seeds_with_params(pin, &[], &[], email)
 	}
 }
 
-impl<'de, Role> serde::Deserialize<'de> for User<Role> {
-	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-	where
-		D: serde::Deserializer<'de>,
-	{
-		struct Visitor<Role>(std::marker::PhantomData<Role>);
-
-		impl<'de, Role> serde::de::Visitor<'de> for Visitor<Role> {
-			type Value = User<Role>;
-
-			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-				formatter.write_str("a base64 encoded string")
-			}
-
-			fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-			where
-				E: serde::de::Error,
-			{
-				// let bytes = base64::decode(v).map_err(E::custom)?;
-				// let bytes: [u8; SIZE] = bytes.as_slice().try_into().map_err(E::custom)?;
-
-				// Ok($type::new(bytes))
-
-				todo!()
-			}
-		}
-
-		deserializer.deserialize_str(Visitor(std::marker::PhantomData))
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn test_invite_accept() {
+		//
 	}
-}
-
-// #[wasm_bindgen]
-pub struct Invite {
-	// seeds
-	// pass?
-	// sender
-	// target
 }

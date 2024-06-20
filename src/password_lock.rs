@@ -31,18 +31,26 @@ const DEFAULT_CONFIG: Config = Config {
 	thread_mode: ThreadMode::Parallel,
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Lock {
 	pub(crate) ct: Vec<u8>,
 	pub(crate) salt: [u8; SALT_SIZE],
 }
 
-// #[wasm_bindgen]
-pub fn lock(pt: &[u8], pass: &str) -> Result<Lock, Error> {
+pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Lock, Error> {
 	let salt = rand::thread_rng().gen();
 	let ct = lock_with_params(pt, pass, &salt, &DEFAULT_CONFIG)?;
 
 	Ok(Lock { ct, salt })
+}
+
+pub fn lock<T>(pt: T, pass: &str) -> Result<Lock, Error>
+where
+	T: Serialize,
+{
+	let serialized = serde_json::to_vec(&pt).unwrap();
+
+	lock_serialized(&serialized, pass)
 }
 
 fn lock_with_params(
@@ -60,7 +68,6 @@ pub fn unlock(lock: Lock, pass: &str) -> Result<Vec<u8>, Error> {
 	unlock_with_params(&lock.ct, pass, &lock.salt, &DEFAULT_CONFIG)
 }
 
-// #[wasm_bindgen]
 fn unlock_with_params(
 	ct: &[u8],
 	pass: &str,
@@ -86,7 +93,7 @@ fn aes_from_params(
 
 #[cfg(test)]
 mod tests {
-	use super::{lock, unlock, DEFAULT_CONFIG};
+	use super::{lock_serialized, unlock, DEFAULT_CONFIG};
 	use crate::password_lock::{lock_with_params, unlock_with_params};
 	use argon2::Config;
 	use rand::Rng;
@@ -114,7 +121,7 @@ mod tests {
 	fn test_unlock_with_wrong_pass() {
 		let msg = b"1234567890";
 		let pass = "password123";
-		let lock = lock(msg, pass).unwrap();
+		let lock = lock_serialized(msg, pass).unwrap();
 		let unlocked = unlock(lock, "wrong_pass");
 
 		assert!(unlocked.is_err());

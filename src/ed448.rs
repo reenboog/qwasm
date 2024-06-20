@@ -1,4 +1,7 @@
-use wasm_bindgen::prelude::wasm_bindgen;
+use serde::{
+	de::{self, Visitor},
+	Deserialize, Deserializer, Serialize, Serializer,
+};
 
 use crate::{
 	key_pair::{KeyPair, KeyPairSize},
@@ -6,15 +9,13 @@ use crate::{
 	public_key::PublicKey,
 };
 
-#[wasm_bindgen]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Signature {
 	bytes: [u8; Self::SIZE],
 }
 
 impl Signature {
 	const SIZE: usize = 114;
-
 	pub fn new(bytes: [u8; Self::SIZE]) -> Self {
 		Self { bytes }
 	}
@@ -29,6 +30,57 @@ impl TryFrom<Vec<u8>> for Signature {
 
 	fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
 		Ok(Self::new(value.as_slice().try_into()?))
+	}
+}
+
+impl Serialize for Signature {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		serializer.serialize_str(&base64::encode(self.bytes))
+	}
+}
+
+impl<'de> Deserialize<'de> for Signature {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		struct SignatureVisitor;
+
+		impl<'de> Visitor<'de> for SignatureVisitor {
+			type Value = Signature;
+
+			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+				formatter.write_str("a base64 encoded string")
+			}
+
+			fn visit_bytes<E>(self, v: &[u8]) -> Result<Signature, E>
+			where
+				E: de::Error,
+			{
+				if v.len() != Signature::SIZE {
+					return Err(de::Error::invalid_length(v.len(), &self));
+				}
+				let mut bytes = [0u8; Signature::SIZE];
+				bytes.copy_from_slice(v);
+				Ok(Signature { bytes })
+			}
+
+			fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+			where
+				E: serde::de::Error,
+			{
+				let bytes = base64::decode(v).map_err(E::custom)?;
+				let bytes: [u8; Signature::SIZE] =
+					bytes.as_slice().try_into().map_err(E::custom)?;
+
+				Ok(Signature::new(bytes))
+			}
+		}
+
+		deserializer.deserialize_str(SignatureVisitor)
 	}
 }
 
@@ -142,6 +194,17 @@ mod tests {
 				.as_bytes(),
 			signature
 		);
+	}
+
+	#[test]
+	fn test_serialize_deserialize_sig() {
+		let kp = KeyPairEd448::generate();
+		let msg = b"123456";
+		let sig = kp.private_key().sign(msg);
+		let serialized = serde_json::to_vec(&sig).unwrap();
+		let deserialized = serde_json::from_slice(&serialized).unwrap();
+
+		assert_eq!(sig, deserialized);
 	}
 
 	#[test]
