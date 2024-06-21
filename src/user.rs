@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::{
-	hkdf,
+	encrypt_db, hkdf,
 	identity::Identity,
 	password_lock,
 	seeds::{self, Bundle, Invite, Seed, Share},
@@ -12,6 +12,8 @@ pub enum Error {
 	UnknownRole,
 	BadJson,
 	WrongPass,
+	BadSalt,
+	NoAccess,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
@@ -42,6 +44,7 @@ impl TryFrom<&str> for Role {
 	}
 }
 
+#[wasm_bindgen]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct User {
 	pub(crate) identity: Identity,
@@ -117,6 +120,52 @@ impl User {
 	}
 }
 
+impl User {
+	// db_root = gen()
+	// h_table = h(db_root + table_users)
+	// h_column = h(h_table + column_name)
+	// h_item = h(h_column + item_salt)
+
+	pub fn encrypt_announcement(&self, msg: &str) -> Result<encrypt_db::Encrypted, Error> {
+		self.encrypt_db_entry("messages", msg.as_bytes(), "text")
+	}
+
+	fn encrypt_db_entry(
+		&self,
+		table: &str,
+		pt: &[u8],
+		column: &str,
+	) -> Result<encrypt_db::Encrypted, Error> {
+		// check role?
+
+		// do I have a salt for column?
+		// do I have a salt for table?
+		// do I have the root db salt?
+		// a list of maps
+		// { k, seed }
+		let bundles: Vec<_> = self.shares.iter().map(|s| s.bundle.db.clone()).collect();
+
+		todo!()
+	}
+
+	fn decrypt_db_entry(
+		&self,
+		table: &str,
+		ct: &[u8],
+		column: &str,
+		salt: &[u8],
+	) -> Result<Vec<u8>, Error> {
+		// users -> address -> 0xaf12ee
+		// salt from slice
+		// do I have a salt for column?
+		// do I have a salt for table?
+		// do I have the root db salt?
+
+		todo!()
+	}
+}
+
+#[wasm_bindgen]
 impl User {
 	// export all root seeds; returns json-serialized Invite
 	pub fn export_seeds_encrypted(&self, pin: &str, email: &str) -> Vec<u8> {

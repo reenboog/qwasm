@@ -4,6 +4,7 @@ key!(PublicKey);
 
 impl<T, const SIZE: usize> PublicKey<T, SIZE> {
 	// TODO: should it be i64 or u64? On iOS, protobuf definitions are mapped to UInt64
+	// FIXME: use [u8; 32] instead
 	pub fn id(&self) -> u64 {
 		id::from_bytes(&self.bytes)
 	}

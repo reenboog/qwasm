@@ -5,19 +5,18 @@ pub struct Hkdf {
 }
 
 impl Hkdf {
-	const EMPTY_SALT: [u8; hmac::Key::SIZE] = [0u8; hmac::Key::SIZE];
+	const EMPTY_KEY: [u8; hmac::Key::SIZE] = [0u8; hmac::Key::SIZE];
 
 	pub fn new(prk: Digest) -> Self {
 		Self { prk }
 	}
 
 	pub fn from_ikm(ikm: &[u8]) -> Self {
-		Self::from_ikm_salted(ikm, &Self::EMPTY_SALT)
+		Self::from_ikm_keyed(ikm, &Self::EMPTY_KEY)
 	}
 
-	// TODO: rename and reflect it's a fixed-size Key, not salt?
-	pub fn from_ikm_salted(ikm: &[u8], salt: &[u8; hmac::Key::SIZE]) -> Self {
-		Self::new(hmac::digest(&hmac::Key::new(*salt), ikm))
+	pub fn from_ikm_keyed(ikm: &[u8], key: &[u8; hmac::Key::SIZE]) -> Self {
+		Self::new(hmac::digest(&hmac::Key::new(*key), ikm))
 	}
 
 	// TODO: introduce a new type for expanded?, clarify its size; or may be just a const or a combined type, ie KeyMac?
@@ -51,7 +50,7 @@ impl Hkdf {
 mod tests {
 	use crate::{hkdf::Hkdf, hmac::Digest};
 
-	// [1u8; 32] hmac-ed with EMPTY_SALT
+	// [1u8; 32] hmac-ed with EMPTY_KEY
 	const DIGEST: &[u8; 32] = b"\x80\xa0\x9d\xe3\xbf\xe3\x0d\xa9\x01\x16\xe5\x88\xad\xe2\xf8\x12\xd4\x9b\x55\x62\x5b\xe8\xb4\xab\xbf\xf7\x75\xfa\x5a\x5a\x74\xe9";
 	// DIGEST hkdf-ed up to 80 with b"SecureMessenger"
 	const RES: &[u8; 80] = b"\x69\xef\xc1\x01\x77\xa9\x2d\x9f\x65\x47\x82\x64\x0d\xbd\x07\xa4\xf4\x2a\x8d\xe1\x6c\x99\x28\x2d\x46\x4c\xa6\x8b\x7e\x5e\x69\x4a\x57\x2c\x91\x39\xb6\x0b\x8e\x5d\xb1\xf1\xb0\x01\xe9\x98\x7a\xdc\xd7\xef\x5a\xde\x7f\x38\x5a\x84\x43\xfb\x44\xad\x99\x08\x9a\x88\x40\x4c\x5d\xf2\x3c\x80\x14\xe4\x0a\xa1\x65\x72\x6c\x37\x94\x0e";
@@ -66,10 +65,10 @@ mod tests {
 
 	#[test]
 	fn test_extract_from_ikm() {
-		let key = [1u8; 32];
-		let salt = Hkdf::EMPTY_SALT.to_owned();
+		let ikm = [1u8; 32];
+		let key = Hkdf::EMPTY_KEY.to_owned();
 
-		let res = Hkdf::from_ikm_salted(&key, &salt).expand::<80>(b"SecureMessenger");
+		let res = Hkdf::from_ikm_keyed(&ikm, &key).expand::<80>(b"SecureMessenger");
 
 		assert_eq!(res, RES.to_owned());
 	}

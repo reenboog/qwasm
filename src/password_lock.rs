@@ -4,12 +4,8 @@
 use argon2::{Config, ThreadMode, Variant, Version};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::wasm_bindgen;
 
-use crate::{aes_gcm, hkdf};
-
-const HASH_LENGTH: u32 = 32;
-pub(crate) const SALT_SIZE: usize = 32;
+use crate::{aes_gcm, hkdf, hmac, salt::Salt};
 
 #[derive(Debug)]
 pub enum Error {
@@ -19,22 +15,22 @@ pub enum Error {
 const DEFAULT_CONFIG: Config = Config {
 	// irrelevant fields
 	variant: Variant::Argon2id,
-	hash_length: HASH_LENGTH,
+	hash_length: hmac::Digest::SIZE as u32,
 	time_cost: 2, // FIXME: find a good value
 	lanes: 4,
-	mem_cost: 128 * 1024,
+	mem_cost: 32 * 1024,
 
 	// relevant fields
 	ad: &[],
 	secret: &[],
 	version: Version::Version13,
-	thread_mode: ThreadMode::Parallel,
+	thread_mode: ThreadMode::Sequential,
 };
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Lock {
 	pub(crate) ct: Vec<u8>,
-	pub(crate) salt: [u8; SALT_SIZE],
+	pub(crate) salt: [u8; Salt::SIZE],
 }
 
 pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Lock, Error> {
@@ -56,7 +52,7 @@ where
 fn lock_with_params(
 	pt: &[u8],
 	pass: &str,
-	salt: &[u8; SALT_SIZE],
+	salt: &[u8; Salt::SIZE],
 	config: &Config,
 ) -> Result<Vec<u8>, Error> {
 	let aes = aes_from_params(pass, salt, config)?;
@@ -71,7 +67,7 @@ pub fn unlock(lock: Lock, pass: &str) -> Result<Vec<u8>, Error> {
 fn unlock_with_params(
 	ct: &[u8],
 	pass: &str,
-	salt: &[u8; SALT_SIZE],
+	salt: &[u8; Salt::SIZE],
 	config: &Config,
 ) -> Result<Vec<u8>, Error> {
 	let aes = aes_from_params(pass, salt, config)?;
@@ -81,7 +77,7 @@ fn unlock_with_params(
 
 fn aes_from_params(
 	pass: &str,
-	salt: &[u8; SALT_SIZE],
+	salt: &[u8; Salt::SIZE],
 	config: &Config,
 ) -> Result<aes_gcm::Aes, Error> {
 	let hash = argon2::hash_raw(pass.as_bytes(), salt, config).map_err(|_| Error::Argon2Failed)?;

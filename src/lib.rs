@@ -1,5 +1,6 @@
 use wasm_bindgen::prelude::*;
 pub mod ed448;
+pub mod encrypt_db;
 pub mod hkdf;
 pub mod hmac;
 pub mod identity;
@@ -15,6 +16,7 @@ mod key;
 mod key_pair;
 mod private_key;
 mod public_key;
+mod salt;
 
 #[wasm_bindgen]
 pub fn add(a: i32, b: i32) -> i32 {

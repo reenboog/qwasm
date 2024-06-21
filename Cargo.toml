@@ -23,7 +23,7 @@ x448 = { version = "0.6" }
 ed448-rust = { git = "https://github.com/reenboog/ed448-rust", branch = "master" }
 
 # aes gcm
-ring = { version = "0.16.20" }
+aes-gcm = "0.9.0"
 
 # randomness
 rand = { version = "0.8.5" }

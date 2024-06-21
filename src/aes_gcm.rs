@@ -1,7 +1,9 @@
-use rand::Rng;
-use ring::aead::{
-	Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey, AES_256_GCM,
+use aes_gcm::{
+	aead::{generic_array::GenericArray, Aead, NewAead},
+	Aes256Gcm,
 };
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Key(pub [u8; Self::SIZE]);
@@ -10,7 +12,9 @@ impl Key {
 	pub const SIZE: usize = 32;
 
 	pub fn generate() -> Self {
-		Self(rand::thread_rng().gen())
+		let mut key = [0u8; Self::SIZE];
+		OsRng.fill_bytes(&mut key);
+		Self(key)
 	}
 
 	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
@@ -25,17 +29,13 @@ impl Iv {
 	pub const SIZE: usize = 12;
 
 	pub fn generate() -> Self {
-		Self(rand::thread_rng().gen())
+		let mut iv = [0u8; Self::SIZE];
+		OsRng.fill_bytes(&mut iv);
+		Self(iv)
 	}
 
 	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
 		&self.0
-	}
-}
-
-impl NonceSequence for Iv {
-	fn advance(&mut self) -> Result<Nonce, ring::error::Unspecified> {
-		Nonce::try_assume_unique_for_key(&self.0)
 	}
 }
 
@@ -53,7 +53,7 @@ pub struct Aes {
 
 impl Aes {
 	pub fn new() -> Self {
-		Self::new_with_key_iv(Key::generate(), Iv(rand::thread_rng().gen()))
+		Self::new_with_key_iv(Key::generate(), Iv::generate())
 	}
 
 	pub fn new_with_key(key: Key) -> Self {
@@ -65,27 +65,17 @@ impl Aes {
 	}
 
 	pub fn encrypt(&self, pt: &[u8]) -> Vec<u8> {
-		let mut ct = pt.to_vec();
-		let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes()).unwrap();
-		let mut sealing_key = SealingKey::new(unbound_key, self.iv);
-
-		sealing_key
-			.seal_in_place_append_tag(Aad::empty(), &mut ct)
-			.unwrap();
-
-		ct
+		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.0));
+		let nonce = GenericArray::from_slice(&self.iv.0);
+		cipher.encrypt(nonce, pt).unwrap()
 	}
 
 	pub fn decrypt(&self, ct: &[u8]) -> Result<Vec<u8>, Error> {
-		let mut ct = ct.to_vec();
-		let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes()).unwrap();
-		let mut opening_key = OpeningKey::new(unbound_key, self.iv);
-
-		let r = opening_key
-			.open_in_place(Aad::empty(), &mut ct)
-			.or(Err(Error::WrongKeyMaterial))?;
-
-		Ok(r.to_vec())
+		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.0));
+		let nonce = GenericArray::from_slice(&self.iv.0);
+		cipher
+			.decrypt(nonce, ct)
+			.map_err(|_| Error::WrongKeyMaterial)
 	}
 
 	pub fn as_bytes(&self) -> [u8; Key::SIZE + Iv::SIZE] {
@@ -116,8 +106,7 @@ impl TryFrom<&[u8]> for Aes {
 
 #[cfg(test)]
 mod tests {
-	use super::Aes;
-	use crate::aes_gcm::{Error, Iv, Key};
+	use super::{Aes, Error, Iv, Key};
 
 	#[test]
 	fn test_encrypt_decrypt() {

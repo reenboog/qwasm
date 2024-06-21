@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::{
-	ed448::Signature,
-	identity::{self, Identity},
+	identity::{self},
 	password_lock::Lock,
-	x448::PublicKeyX448,
 };
 
 pub(crate) const SEED_SIZE: usize = 32;
 
+#[wasm_bindgen]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Seed {
 	pub(crate) bytes: [u8; SEED_SIZE],
@@ -45,9 +44,17 @@ pub struct Invite {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Bundle {
 	// seeds for the filesystem; a key equals to all zeroes is a root key
-	fs: HashMap<u64, Seed>,
+	// can be root
+	// dir
+	// file
+	pub fs: HashMap<u64, Seed>,
 	// seeds for the database; a key equals to all zeroes is a root key
-	db: HashMap<u64, Seed>,
+
+	// can be root
+	// table
+	// column
+	// or entry? -rather no
+	pub db: HashMap<u64, Seed>,
 }
 
 impl Bundle {
@@ -66,7 +73,7 @@ impl Bundle {
 		self.db.insert(id, seed);
 	}
 
-	pub fn id(&self) -> u64 {
-		todo!()
-	}
+	// pub fn id(&self) -> u64 {
+	// 	todo!()
+	// }
 }

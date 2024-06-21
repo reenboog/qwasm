@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 
 use crate::{
 	identity::{self, Identity},
@@ -16,6 +16,18 @@ pub enum Error {
 	UnknownRole,
 }
 
+impl From<Error> for JsValue {
+	fn from(value: Error) -> Self {
+		use Error::*;
+
+		JsValue::from_str(match value {
+			WrongPass => "WrongPass",
+			BadJson => "BadJson",
+			UnknownRole => "UnknownRole",
+		})
+	}
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct LockedUser {
 	id: u64,
@@ -27,6 +39,7 @@ pub struct LockedUser {
 	shares: Vec<LockedShare>,
 }
 
+#[wasm_bindgen]
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Registered {
 	// to be sent to the backend
@@ -35,6 +48,7 @@ pub struct Registered {
 	user: User,
 }
 
+#[wasm_bindgen]
 impl Registered {
 	pub fn json(&self) -> Vec<u8> {
 		self.locked_user.clone()
@@ -46,6 +60,7 @@ impl Registered {
 }
 
 // registration to upload (encrypted & encoded)
+#[wasm_bindgen]
 pub fn register_as_god(pass: &str) -> Registered {
 	register_with_params(pass, identity::Identity::generate(), None, user::Role::God)
 }
@@ -104,7 +119,8 @@ fn register_with_params(
 }
 
 // FIXME: convert Uer to JsValue
-pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
+#[wasm_bindgen]
+pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
 	let decrypted_priv = password_lock::unlock(
 		serde_json::from_slice(&locked.encrypted_priv).map_err(|_| Error::BadJson)?,
