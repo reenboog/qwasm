@@ -47,14 +47,14 @@ pub struct Bundle {
 	// can be root
 	// dir
 	// file
-	pub fs: HashMap<u64, Seed>,
+	pub fs: HashMap<u128, Seed>,
 	// seeds for the database; a key equals to all zeroes is a root key
 
 	// can be root
 	// table
 	// column
 	// or entry? -rather no
-	pub db: HashMap<u64, Seed>,
+	pub db: HashMap<u128, Seed>,
 }
 
 impl Bundle {
@@ -65,11 +65,11 @@ impl Bundle {
 		}
 	}
 
-	pub fn set_fs(&mut self, id: u64, seed: Seed) {
+	pub fn set_fs(&mut self, id: u128, seed: Seed) {
 		self.fs.insert(id, seed);
 	}
 
-	pub fn set_db(&mut self, id: u64, seed: Seed) {
+	pub fn set_db(&mut self, id: u128, seed: Seed) {
 		self.db.insert(id, seed);
 	}
 

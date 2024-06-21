@@ -3,9 +3,7 @@ use crate::{id, key::key};
 key!(PublicKey);
 
 impl<T, const SIZE: usize> PublicKey<T, SIZE> {
-	// TODO: should it be i64 or u64? On iOS, protobuf definitions are mapped to UInt64
-	// FIXME: use [u8; 32] instead
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> u128 {
 		id::from_bytes(&self.bytes)
 	}
 }
@@ -22,6 +20,6 @@ mod tests {
 		let key = TestPublicKey::new(b"0123456789".to_owned());
 		let id = key.id();
 
-		assert_eq!(9572568648884945950, id);
+		assert_eq!(176582723993996226334291952163372409999, id);
 	}
 }

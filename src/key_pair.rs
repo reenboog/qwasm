@@ -31,7 +31,7 @@ impl<T, const PRIV_SIZE: usize, const PUB_SIZE: usize> KeyPair<T, PRIV_SIZE, PUB
 		&self.private
 	}
 
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> u128 {
 		self.public_key().id()
 	}
 }

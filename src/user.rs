@@ -54,7 +54,7 @@ pub struct User {
 }
 
 impl User {
-	fn seeds_for_ids(&self, _fs_ids: &[u64], _db_ids: &[u64]) -> Bundle {
+	fn seeds_for_ids(&self, _fs_ids: &[u128], _db_ids: &[u128]) -> Bundle {
 		match self.role {
 			Role::God => {
 				// FIXME: for now, everybody would have access to the very root seeds
@@ -102,8 +102,8 @@ impl User {
 	fn share_seeds_with_params(
 		&self,
 		pin: &str,
-		fs_ids: &[u64],
-		db_ids: &[u64],
+		fs_ids: &[u128],
+		db_ids: &[u128],
 		email: &str,
 	) -> Vec<u8> {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);

@@ -61,7 +61,7 @@ fn aes_from_dh_keys(sk: &PrivateKeyX448, pk: &PublicKeyX448) -> aes_gcm::Aes {
 }
 
 impl Public {
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> u128 {
 		id::from_bytes(&[self.x448.as_bytes(), self.ed448.as_bytes().as_slice()].concat())
 	}
 
@@ -96,7 +96,7 @@ impl Identity {
 	// should be explicitly called by js to please the gc gods
 	pub fn free(self) {}
 
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> u128 {
 		self._pub.id()
 	}
 
