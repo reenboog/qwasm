@@ -1,4 +1,5 @@
-// FIXME: make all objects implement `free`
+// FIXME: make all objects implement `free` – seems to be automatically implemented, is it not?
+// FIXME: get rid of base64, since binary json is used?
 // TODO: use web_sys for storage and network?
 
 god_signup
@@ -66,6 +67,11 @@ h_table = h(db_root + table_users)
 h_column = h(h_table + column_name)
 h_item = h(h_column + item_salt)
 
+FIXME: mix hashes with the most recent revocation-hash (encrypted to users' public keys) for revocation?
+so that when creating a fodler, you'd always mix the hierarchy with it:
+
+h_item = h(h_column + item_salt + revocation_token(latest_id))
+
 tables
 	table_users
 		name
@@ -112,11 +118,11 @@ macaroons?
 index for files for 'view all'?
 
 root
-	documents // k = h(h(parent_seed + id) + iv)
+	documents // k = h(h(parent_seed + id) + iv + revocation_token_by_id(id)?)
 		.files
 		*a1
 		*a2
-		pictures
+		pictures { acl_tokens }
 			.files
 			*p0
 			photos

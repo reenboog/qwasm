@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub(crate) const SEED_SIZE: usize = 32;
+pub(crate) const ROOT_ID: u128 = 0;
 
 #[wasm_bindgen]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

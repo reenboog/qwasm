@@ -43,9 +43,9 @@ pub struct LockedUser {
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Registered {
 	// to be sent to the backend
-	locked_user: Vec<u8>,
+	pub(crate) locked_user: Vec<u8>,
 	// to be used internally
-	user: User,
+	pub(crate) user: User,
 }
 
 #[wasm_bindgen]

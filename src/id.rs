@@ -17,12 +17,21 @@ mod tests {
 	fn test_non_zero_output_for_zeroes() {
 		// any extra zero bit should lead to a diferent result
 		assert_eq!(from_bytes(&[0u8]), 146485314518219203619771214699089627692);
-		assert_eq!(from_bytes(&[0u8, 0]), 200228410469609350895510434748094361745);
-		assert_eq!(from_bytes(&[0u8, 0, 0]), 149696530466636843303860530532259605126);
+		assert_eq!(
+			from_bytes(&[0u8, 0]),
+			200228410469609350895510434748094361745
+		);
+		assert_eq!(
+			from_bytes(&[0u8, 0, 0]),
+			149696530466636843303860530532259605126
+		);
 	}
 
 	#[test]
 	fn test_arbitrary() {
-		assert_eq!(176582723993996226334291952163372409999, from_bytes(b"0123456789"));
+		assert_eq!(
+			176582723993996226334291952163372409999,
+			from_bytes(b"0123456789")
+		);
 	}
 }

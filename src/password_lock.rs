@@ -12,19 +12,36 @@ pub enum Error {
 	Argon2Failed,
 }
 
+#[cfg(not(test))]
 const DEFAULT_CONFIG: Config = Config {
 	// irrelevant fields
 	variant: Variant::Argon2id,
 	hash_length: hmac::Digest::SIZE as u32,
 	time_cost: 2, // FIXME: find a good value
 	lanes: 4,
-	mem_cost: 32 * 1024,
+	mem_cost: 64 * 1024,
 
 	// relevant fields
 	ad: &[],
 	secret: &[],
 	version: Version::Version13,
 	thread_mode: ThreadMode::Sequential,
+};
+
+#[cfg(test)]
+const DEFAULT_CONFIG: Config = Config {
+	// irrelevant fields
+	variant: Variant::Argon2id,
+	hash_length: hmac::Digest::SIZE as u32,
+	time_cost: 1,
+	lanes: 1,
+	mem_cost: 1 * 128,
+
+	// relevant fields
+	ad: &[],
+	secret: &[],
+	version: Version::Version13,
+	thread_mode: ThreadMode::Parallel,
 };
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -84,7 +101,7 @@ fn aes_from_params(
 	let key_iv =
 		hkdf::Hkdf::from_ikm(&hash).expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
 
-	aes_gcm::Aes::try_from(key_iv.as_slice()).map_err(|_| Error::Argon2Failed)
+	Ok(aes_gcm::Aes::try_from(key_iv.as_slice()).unwrap())
 }
 
 #[cfg(test)]

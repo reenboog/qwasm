@@ -57,7 +57,7 @@ fn aes_from_dh_keys(sk: &PrivateKeyX448, pk: &PublicKeyX448) -> aes_gcm::Aes {
 	let key_iv = hkdf::Hkdf::from_ikm(shared.as_bytes())
 		.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
 
-	aes_gcm::Aes::try_from(key_iv.as_slice()).unwrap()
+	aes_gcm::Aes::from(&key_iv)
 }
 
 impl Public {

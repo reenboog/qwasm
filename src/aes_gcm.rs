@@ -104,6 +104,15 @@ impl TryFrom<&[u8]> for Aes {
 	}
 }
 
+impl From<&[u8; Key::SIZE + Iv::SIZE]> for Aes {
+	fn from(val: &[u8; Key::SIZE + Iv::SIZE]) -> Self {
+		Self::new_with_key_iv(
+			Key(val[..Key::SIZE].try_into().unwrap()),
+			Iv(val[Key::SIZE..].try_into().unwrap()),
+		)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{Aes, Error, Iv, Key};
