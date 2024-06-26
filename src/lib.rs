@@ -8,6 +8,7 @@ pub mod password_lock;
 pub mod register;
 pub mod seeds;
 pub mod user;
+pub mod vault;
 pub mod x448;
 
 mod aes_gcm;

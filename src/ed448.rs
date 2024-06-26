@@ -1,5 +1,5 @@
 use serde::{
-	de::{self, Visitor},
+	de::{self},
 	Deserialize, Deserializer, Serialize, Serializer,
 };
 
@@ -38,7 +38,7 @@ impl Serialize for Signature {
 	where
 		S: Serializer,
 	{
-		serializer.serialize_str(&base64::encode(self.bytes))
+		serializer.serialize_bytes(&self.bytes)
 	}
 }
 
@@ -49,38 +49,28 @@ impl<'de> Deserialize<'de> for Signature {
 	{
 		struct SignatureVisitor;
 
-		impl<'de> Visitor<'de> for SignatureVisitor {
+		impl<'de> de::Visitor<'de> for SignatureVisitor {
 			type Value = Signature;
 
 			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-				formatter.write_str("a base64 encoded string")
+				formatter.write_str(&format!("a byte array of length {}", Signature::SIZE))
 			}
 
-			fn visit_bytes<E>(self, v: &[u8]) -> Result<Signature, E>
+			fn visit_seq<A>(self, mut seq: A) -> Result<Signature, A::Error>
 			where
-				E: de::Error,
+				A: de::SeqAccess<'de>,
 			{
-				if v.len() != Signature::SIZE {
-					return Err(de::Error::invalid_length(v.len(), &self));
-				}
 				let mut bytes = [0u8; Signature::SIZE];
-				bytes.copy_from_slice(v);
-				Ok(Signature { bytes })
-			}
-
-			fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-			where
-				E: serde::de::Error,
-			{
-				let bytes = base64::decode(v).map_err(E::custom)?;
-				let bytes: [u8; Signature::SIZE] =
-					bytes.as_slice().try_into().map_err(E::custom)?;
-
+				for i in 0..Signature::SIZE {
+					bytes[i] = seq
+						.next_element()?
+						.ok_or_else(|| de::Error::invalid_length(i, &self))?;
+				}
 				Ok(Signature::new(bytes))
 			}
 		}
 
-		deserializer.deserialize_str(SignatureVisitor)
+		deserializer.deserialize_seq(SignatureVisitor)
 	}
 }
 

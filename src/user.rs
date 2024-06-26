@@ -234,6 +234,11 @@ impl User {
 
 		Ok(aes_gcm::Aes::from(&key_iv))
 	}
+
+	//
+	fn decrypt_node(&self, id: u128) -> Result<Vec<u8>, Error> {
+		todo!()
+	}
 }
 
 #[wasm_bindgen]

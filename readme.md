@@ -1,5 +1,4 @@
 // FIXME: make all objects implement `free` – seems to be automatically implemented, is it not?
-// FIXME: get rid of base64, since binary json is used?
 // TODO: use web_sys for storage and network?
 
 god_signup
@@ -71,6 +70,9 @@ FIXME: mix hashes with the most recent revocation-hash (encrypted to users' publ
 so that when creating a fodler, you'd always mix the hierarchy with it:
 
 h_item = h(h_column + item_salt + revocation_token(latest_id))
+
+bad since requires a new token for everybody, when someone is revoked, plus
+works bad if a user is revoked one of his several shares
 
 tables
 	table_users
