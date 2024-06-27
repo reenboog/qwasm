@@ -249,6 +249,7 @@ impl User {
 		self.share_seeds_with_params(pin, &[], &[], email)
 	}
 
+	// FIXME: sign as well
 	pub fn encrypt_announcement(&self, msg: &str) -> Result<Vec<u8>, JsValue> {
 		self.encrypt_db_entry("messages", msg.as_bytes(), "text")
 			.map_err(|e| e.into())

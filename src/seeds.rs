@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::{
 	identity::{self},
@@ -11,10 +11,18 @@ use crate::{
 pub(crate) const SEED_SIZE: usize = 32;
 pub(crate) const ROOT_ID: u128 = 0;
 
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Seed {
 	pub(crate) bytes: [u8; SEED_SIZE],
+}
+
+impl Seed {
+	pub fn generate() -> Self {
+		let mut bytes = [0u8; SEED_SIZE];
+		OsRng.fill_bytes(&mut bytes);
+
+		Self { bytes }
+	}
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

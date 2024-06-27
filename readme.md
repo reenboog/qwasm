@@ -1,4 +1,5 @@
 // FIXME: make all objects implement `free` – seems to be automatically implemented, is it not?
+// TODO: remove unused Serialized/Deserialized
 // TODO: use web_sys for storage and network?
 
 god_signup
@@ -45,10 +46,10 @@ id: 6: name: signed, subdirs: [], files: [a7]
 
 k = h(h(parent_seed + id) + iv)
 
-{ id, parent, iv, content }
-{ id, parent, iv, content }
-{ id, parent, iv, content }
-{ id, parent, iv, content }
+{ id, parent, salt, content }
+{ id, parent, salt, content }
+{ id, parent, salt, content }
+{ id, parent, salt, content }
 
 // for tables, seed_id is not enough, wee need the whole table-column path
 // though such an id could be specified as 'table:column'
@@ -72,7 +73,7 @@ so that when creating a fodler, you'd always mix the hierarchy with it:
 h_item = h(h_column + item_salt + revocation_token(latest_id))
 
 bad since requires a new token for everybody, when someone is revoked, plus
-works bad if a user is revoked one of his several shares
+works bad if a user is revoked just one of his several shares
 
 tables
 	table_users
