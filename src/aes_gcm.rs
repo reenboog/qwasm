@@ -4,8 +4,9 @@ use aes_gcm::{
 };
 use rand::rngs::OsRng;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Key(pub [u8; Self::SIZE]);
 
 impl Key {
@@ -22,7 +23,7 @@ impl Key {
 	}
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Iv(pub [u8; Self::SIZE]);
 
 impl Iv {
@@ -45,7 +46,7 @@ pub enum Error {
 	WrongKeyIvSize,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Aes {
 	pub key: Key,
 	pub iv: Iv,
