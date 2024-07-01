@@ -1,7 +1,13 @@
+use rand::{rngs::OsRng, Rng};
 use sha2::{Digest, Sha256};
 
 pub fn from_bytes(bytes: &[u8]) -> u128 {
 	u128::from_be_bytes(Sha256::digest(bytes).to_vec()[..16].try_into().unwrap())
+}
+
+pub fn generate() -> u128 {
+	let mut rng = OsRng;
+	rng.gen()
 }
 
 #[cfg(test)]
