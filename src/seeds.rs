@@ -3,10 +3,7 @@ use std::collections::HashMap;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-	identity::{self},
-	password_lock::Lock,
-};
+use crate::{encrypted::Encrypted, identity};
 
 pub(crate) const SEED_SIZE: usize = 32;
 pub(crate) const ROOT_ID: u128 = 0;
@@ -46,7 +43,7 @@ pub struct Invite {
 	// pin needs to be shared through a trusted channel, so no need to sign
 	pub(crate) sender: identity::Public,
 	pub(crate) email: String,
-	pub(crate) payload: Lock,
+	pub(crate) payload: Encrypted,
 	// sig
 }
 

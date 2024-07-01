@@ -2,10 +2,9 @@
 // any data + eph_pass -> encrypted
 
 use argon2::{Config, ThreadMode, Variant, Version};
-use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::{aes_gcm, hkdf, hmac, salt::Salt};
+use crate::{aes_gcm, encrypted::Encrypted, hkdf, hmac, salt::Salt};
 
 #[derive(Debug)]
 pub enum Error {
@@ -44,20 +43,20 @@ const DEFAULT_CONFIG: Config = Config {
 	thread_mode: ThreadMode::Parallel,
 };
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct Lock {
-	pub(crate) ct: Vec<u8>,
-	pub(crate) salt: [u8; Salt::SIZE],
-}
+// #[derive(Serialize, Deserialize, PartialEq, Debug)]
+// pub struct Lock {
+// 	pub(crate) ct: Vec<u8>,
+// 	pub(crate) salt: [u8; Salt::SIZE],
+// }
 
-pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Lock, Error> {
-	let salt = rand::thread_rng().gen();
+pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Encrypted, Error> {
+	let salt = Salt::generate();
 	let ct = lock_with_params(pt, pass, &salt, &DEFAULT_CONFIG)?;
 
-	Ok(Lock { ct, salt })
+	Ok(Encrypted { ct, salt })
 }
 
-pub fn lock<T>(pt: T, pass: &str) -> Result<Lock, Error>
+pub fn lock<T>(pt: T, pass: &str) -> Result<Encrypted, Error>
 where
 	T: Serialize,
 {
@@ -66,25 +65,20 @@ where
 	lock_serialized(&serialized, pass)
 }
 
-fn lock_with_params(
-	pt: &[u8],
-	pass: &str,
-	salt: &[u8; Salt::SIZE],
-	config: &Config,
-) -> Result<Vec<u8>, Error> {
+fn lock_with_params(pt: &[u8], pass: &str, salt: &Salt, config: &Config) -> Result<Vec<u8>, Error> {
 	let aes = aes_from_params(pass, salt, config)?;
 
 	Ok(aes.encrypt(pt))
 }
 
-pub fn unlock(lock: Lock, pass: &str) -> Result<Vec<u8>, Error> {
+pub fn unlock(lock: Encrypted, pass: &str) -> Result<Vec<u8>, Error> {
 	unlock_with_params(&lock.ct, pass, &lock.salt, &DEFAULT_CONFIG)
 }
 
 fn unlock_with_params(
 	ct: &[u8],
 	pass: &str,
-	salt: &[u8; Salt::SIZE],
+	salt: &Salt,
 	config: &Config,
 ) -> Result<Vec<u8>, Error> {
 	let aes = aes_from_params(pass, salt, config)?;
@@ -92,12 +86,9 @@ fn unlock_with_params(
 	aes.decrypt(ct).map_err(|_| Error::Argon2Failed)
 }
 
-fn aes_from_params(
-	pass: &str,
-	salt: &[u8; Salt::SIZE],
-	config: &Config,
-) -> Result<aes_gcm::Aes, Error> {
-	let hash = argon2::hash_raw(pass.as_bytes(), salt, config).map_err(|_| Error::Argon2Failed)?;
+fn aes_from_params(pass: &str, salt: &Salt, config: &Config) -> Result<aes_gcm::Aes, Error> {
+	let hash =
+		argon2::hash_raw(pass.as_bytes(), &salt.bytes, config).map_err(|_| Error::Argon2Failed)?;
 	let key_iv =
 		hkdf::Hkdf::from_ikm(&hash).expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
 
@@ -107,9 +98,11 @@ fn aes_from_params(
 #[cfg(test)]
 mod tests {
 	use super::{lock_serialized, unlock, DEFAULT_CONFIG};
-	use crate::password_lock::{lock_with_params, unlock_with_params};
+	use crate::{
+		password_lock::{lock_with_params, unlock_with_params},
+		salt::Salt,
+	};
 	use argon2::Config;
-	use rand::Rng;
 
 	const TEST_CONFIG: Config = Config {
 		time_cost: 1,
@@ -123,7 +116,7 @@ mod tests {
 	fn test_lock_unlock() {
 		let msg = b"1234567890";
 		let pass = "password123";
-		let salt = rand::thread_rng().gen();
+		let salt = Salt::generate();
 		let lock = lock_with_params(msg, pass, &salt, &TEST_CONFIG).unwrap();
 		let unlocked = unlock_with_params(&lock, pass, &salt, &TEST_CONFIG).unwrap();
 

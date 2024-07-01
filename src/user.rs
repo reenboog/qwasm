@@ -3,8 +3,8 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 
 use crate::{
 	aes_gcm,
-	encrypt_db::{self, SeedById},
-	hkdf,
+	database::{self, SeedById},
+	encrypted, hkdf,
 	identity::Identity,
 	password_lock,
 	salt::Salt,
@@ -106,6 +106,7 @@ impl User {
 				//	I'll always have a complete node tree
 				// fs_ids.for_each id
 				// 	1 node.get(id) else NoAccess
+				// so, export from a tree instead!
 				let mut bundle = Bundle::new();
 
 				bundle.set_db(ROOT_ID, self.db_seed());
@@ -173,7 +174,7 @@ impl User {
 		let salt = Salt::generate();
 		let aes = self.aes_for_entry_in_table(table, column, salt.clone())?;
 		let ct = aes.encrypt(pt);
-		let encrypted = encrypt_db::Encrypted { ct, salt };
+		let encrypted = encrypted::Encrypted { ct, salt };
 
 		Ok(serde_json::to_vec(&encrypted).unwrap())
 	}
@@ -184,7 +185,7 @@ impl User {
 		encrypted: &[u8],
 		column: &str,
 	) -> Result<Vec<u8>, Error> {
-		let encrypted: encrypt_db::Encrypted =
+		let encrypted: encrypted::Encrypted =
 			serde_json::from_slice(encrypted).map_err(|_| Error::BadJson)?;
 		let aes = self.aes_for_entry_in_table(table, column, encrypted.salt)?;
 
@@ -205,21 +206,21 @@ impl User {
 			.collect::<Vec<_>>();
 
 		let seed = if let Some(seed_from_col) = bundles
-			.seed_by_id(encrypt_db::id_for_column(table, column), |s| {
-				encrypt_db::derive_entry_seed_from_column(s, &salt)
+			.seed_by_id(database::id_for_column(table, column), |s| {
+				database::derive_entry_seed_from_column(s, &salt)
 			}) {
 			Ok(seed_from_col)
 		} else if let Some(seed_from_table) = bundles
-			.seed_by_id(encrypt_db::id_for_table(table), |s| {
-				encrypt_db::derive_entry_seed_from_table(s, column, &salt)
+			.seed_by_id(database::id_for_table(table), |s| {
+				database::derive_entry_seed_from_table(s, column, &salt)
 			}) {
 			Ok(seed_from_table)
 		} else if let Some(seed_from_root) = bundles.seed_by_id(ROOT_ID, |s| {
-			encrypt_db::derive_entry_seed_from_root(s, table, column, &salt)
+			database::derive_entry_seed_from_root(s, table, column, &salt)
 		}) {
 			Ok(seed_from_root)
 		} else if self.role == Role::God {
-			Ok(encrypt_db::derive_entry_seed_from_root(
+			Ok(database::derive_entry_seed_from_root(
 				&self.db_seed(),
 				table,
 				column,
