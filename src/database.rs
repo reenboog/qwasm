@@ -93,16 +93,10 @@ pub fn id_for_table(table: &str) -> u128 {
 	id::from_bytes(table.as_bytes())
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Encrypted {
-	pub ct: Vec<u8>,
-	pub salt: Salt,
-}
-
 #[cfg(test)]
 mod tests {
 	use crate::{
-		encrypt_db::{
+		database::{
 			derive_column_seed_from_root, derive_column_seed_from_table,
 			derive_entry_seed_from_column, derive_entry_seed_from_root,
 			derive_entry_seed_from_table, derive_table_seed_from_root,
