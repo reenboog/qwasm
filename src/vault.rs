@@ -1,47 +1,3 @@
-// a user can have multiple top-level shares belonging to different subtrees,
-// hence more than one root is possible
-
-// fs:
-// 	docs/
-//		*invoices/
-//			*june.pdf
-//			*july.pdf
-//			*...
-//		contracts/
-//			*upgrade.pdf
-//			contractors.pdf
-//			*infra.pdf
-//	*recordings/
-//		*...
-
-/*
-
-	.node ~256 bytes
-	{ id, parent, salt, content }
-
-	{ documents, root, 123bc, .dir { seed: bvncnjs, name: documents } }
-	{ pictures, dicuments, 45544, .dir { seed: ssssss, name: pictures } }
-	{ photos, pictures, 33222, .dir { seed: kkkkk, name: photos } }
-
-	k = h(h(parent_seed + id) + iv)
-
-	.content
-	{
-		name,
-		created_at,
-		updated_at,
-
-		type:
-		.file { uri, key_iv, preview }
-		.dir { seed }
-	}
-
-	1 unlock
-	2 fetch Entries
-	3 build a tree
-
-*/
-
 use std::collections::HashMap;
 
 use crate::{
@@ -58,7 +14,7 @@ use serde::{Deserialize, Serialize};
 // encrypted content: json {  }
 
 #[derive(PartialEq, Debug)]
-enum Error {
+pub enum Error {
 	NoAccess,
 	// TODO: add a description
 	BadOperation,
@@ -67,7 +23,7 @@ enum Error {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-struct FileInfo {
+pub struct FileInfo {
 	uri_id: u128,
 	key_iv: Aes,
 	ext: String,
@@ -91,10 +47,8 @@ struct LockedNode {
 struct LockedContent {
 	created_at: u64,
 	name: String,
-	// updated_at: u64,
-	// opened_at: u64,
-	// creator: identity::Public,
-	// sig: ed448::Signature,
+	// FIXME: introduce creator: identity::Public,
+	// FIXME: introduce sig: ed448::Signature,
 	entry: LockedEntry,
 }
 
@@ -116,10 +70,33 @@ struct Node {
 	entry: Entry,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 enum Entry {
 	File { info: FileInfo },
 	Dir { seed: Seed, children: Vec<Node> },
+}
+
+impl PartialEq for Entry {
+	fn eq(&self, other: &Self) -> bool {
+		match (self, other) {
+			(Self::File { info: l_info }, Self::File { info: r_info }) => l_info == r_info,
+			(
+				Self::Dir {
+					seed: l_seed,
+					children: l_children,
+				},
+				Self::Dir {
+					seed: r_seed,
+					children: r_children,
+				},
+			) => {
+				l_seed == r_seed
+					&& l_children.len() == r_children.len()
+					&& l_children.iter().all(|e| r_children.contains(e))
+			}
+			_ => false,
+		}
+	}
 }
 
 // Use to share access to a particular file/dir and paste to aes_from_node_seed_and_salt
@@ -133,37 +110,71 @@ fn seed_from_parent_for_node(parent: &Seed, id: u128) -> Seed {
 fn aes_from_parent_seed_for_node(seed: &Seed, id: u128, salt: &Salt) -> Aes {
 	let node_seed = seed_from_parent_for_node(seed, id);
 
-	aes_from_node_seed_and_salt(&node_seed, salt)
+	aes_from_node_seed(&node_seed, salt)
 }
 
 // use this to encrypt/decrypt nodes
-fn aes_from_node_seed_and_salt(seed: &Seed, salt: &Salt) -> Aes {
+fn aes_from_node_seed(seed: &Seed, salt: &Salt) -> Aes {
 	let key_iv = Hkdf::from_ikm(&[seed.bytes.as_slice(), &salt.bytes].concat())
 		.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
 
 	aes_gcm::Aes::from(&key_iv)
 }
 
+impl Node {
+	fn encrypt_with_parent_seed(node: &Node, parent: &Seed) -> Vec<u8> {
+		let seed = seed_from_parent_for_node(parent, node.id);
+
+		Self::encrypt(node, &seed)
+	}
+
+	fn encrypt(node: &Node, node_seed: &Seed) -> Vec<u8> {
+		let entry = match &node.entry {
+			Entry::File { info } => LockedEntry::File { info: info.clone() },
+			Entry::Dir { seed, .. } => LockedEntry::Dir { seed: seed.clone() },
+		};
+		let locked_content = LockedContent {
+			created_at: node.created_at,
+			name: node.name.clone(),
+			entry,
+		};
+		let locked_content = serde_json::to_vec(&locked_content).unwrap();
+		let salt = Salt::generate();
+		let aes = aes_from_node_seed(node_seed, &salt);
+		let ct = aes.encrypt(&locked_content);
+		let encrypted = Encrypted { ct, salt };
+		let encrypted = serde_json::to_vec(&encrypted).unwrap();
+		let locked_node = LockedNode {
+			id: node.id,
+			parent_id: node.parent_id,
+			content: encrypted,
+		};
+
+		serde_json::to_vec(&locked_node).unwrap()
+	}
+}
+
+#[derive(PartialEq, Debug)]
 struct FileSystem {
+	// a user can have multiple top-level shares belonging to different
+	// subtrees, therefore more than one root is possible
 	roots: Vec<Node>,
 }
 
 const NO_PARENT_ID: u128 = u128::MAX;
 
-// fn now() -> u64 {
-// 	Date::now() as u64
-// }
 #[cfg(target_arch = "wasm32")]
 fn now() -> u64 {
-    use js_sys::Date;
-    Date::now() as u64
+	use js_sys::Date;
+	Date::now() as u64
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn now() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    duration.as_secs() * 1000 + duration.subsec_millis() as u64
+	use std::time::{SystemTime, UNIX_EPOCH};
+	let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+	duration.as_secs() * 1000 + duration.subsec_millis() as u64
 }
 
 impl FileSystem {
@@ -178,75 +189,55 @@ impl FileSystem {
 			id,
 			parent_id,
 			created_at,
-			name: name.clone(),
+			name,
 			entry: Entry::Dir {
-				seed: seed.clone(),
+				seed,
 				children: Vec::new(),
 			},
 		};
-		let json = Self::encrypt_node(&node, fs_seed);
+		let json = Node::encrypt(&node, fs_seed);
 
 		(Self { roots: vec![node] }, json)
 	}
 
-	fn encrypt_node_with_parent_seed(node: &Node, parent: &Seed) -> Vec<u8> {
-		let seed = seed_from_parent_for_node(parent, node.id);
-
-		Self::encrypt_node(node, &seed)
-	}
-	
-	fn encrypt_node(node: &Node, node_seed: &Seed) -> Vec<u8> {
-		let entry = match &node.entry {
-			Entry::File { info } => LockedEntry::File { info: info.clone() },
-			Entry::Dir { seed, .. } => LockedEntry::Dir { seed: seed.clone() }
-		};
-		let locked_content = LockedContent {
-			created_at: node.created_at,
-			name: node.name.clone(),
-			entry,
-		};
-		let locked_content = serde_json::to_vec(&locked_content).unwrap();
-		let salt = Salt::generate();
-		let aes = aes_from_node_seed_and_salt(node_seed, &salt);
-		let ct = aes.encrypt(&locked_content);
-		let encrypted = Encrypted { ct, salt };
-		let encrypted = serde_json::to_vec(&encrypted).unwrap();
-		let locked_node = LockedNode {
-			id: node.id,
-			parent_id: node.parent_id,
-			content: encrypted,
-		};
-
-		serde_json::to_vec(&locked_node).unwrap()
-	}
-
 	// always fetch all nodes, but build a tre based on shares
 	// TODO: for god, remember to pass one share { root_id: seed } manually
-	// FIXME: pass bundles directly
-	// FIXME: pass jsons?
-	pub fn from_locked_nodes(locked_nodes: &[LockedNode], shares: &[Share]) -> FileSystem {
-		let bundles = shares
+	pub fn from_locked_nodes(
+		locked_nodes: &[&Vec<u8>],
+		bundles: &HashMap<u128, Seed>,
+	) -> FileSystem {
+		// let bundles = shares
+		// 	.iter()
+		// 	.map(|s| s.bundle.fs.clone())
+		// 	.flatten()
+		// 	.collect::<HashMap<_, _>>();
+		let locked_nodes = locked_nodes
 			.iter()
-			.map(|s| s.bundle.fs.clone())
-			.flatten()
-			.collect::<HashMap<_, _>>();
+			.filter_map(|bytes| serde_json::from_slice::<LockedNode>(bytes).ok())
+			.collect::<Vec<_>>();
 
 		let mut node_map: HashMap<u128, Node> = HashMap::new();
 		let mut locked_node_map: HashMap<u128, &LockedNode> = HashMap::new();
-		let mut branches: HashMap<u128, Vec<u128>> = HashMap::new(); // subroots
+		let mut branches: HashMap<u128, Vec<u128>> = HashMap::new();
+		let mut roots = Vec::new();
 
-		for locked_node in locked_nodes {
-			branches
-				.entry(locked_node.parent_id)
-				.or_default()
-				.push(locked_node.id);
+		for locked_node in &locked_nodes {
+			if locked_nodes.iter().any(|ln| ln.id == locked_node.parent_id) {
+				branches
+					.entry(locked_node.parent_id)
+					.or_default()
+					.push(locked_node.id);
+			} else {
+				roots.push(locked_node.id);
+			}
+
 			locked_node_map.insert(locked_node.id, locked_node);
 		}
 
-		for (node_id, seed) in &bundles {
+		for (node_id, seed) in bundles {
 			if let Some(locked_node) = locked_node_map.remove(node_id) {
 				if let Ok(encrypted) = serde_json::from_slice::<Encrypted>(&locked_node.content) {
-					let aes = aes_from_node_seed_and_salt(seed, &encrypted.salt);
+					let aes = aes_from_node_seed(seed, &encrypted.salt);
 					if let Ok(content) = LockedContent::try_from_encrypted(&encrypted.ct, aes) {
 						let node = Node {
 							id: locked_node.id,
@@ -269,12 +260,12 @@ impl FileSystem {
 
 		let mut to_process: Vec<u128> = node_map.keys().cloned().collect();
 
-		while let Some(parent_id) = to_process.pop() {
+		while let Some(id) = to_process.pop() {
 			let mut new_nodes = Vec::new();
 
-			if let Some(parent_node) = node_map.get(&parent_id) {
-				if let Entry::Dir { seed, .. } = &parent_node.entry {
-					if let Some(child_ids) = branches.remove(&parent_id) {
+			if let Some(node) = node_map.get(&id) {
+				if let Entry::Dir { seed, .. } = &node.entry {
+					if let Some(child_ids) = branches.get(&id) {
 						for child_id in child_ids {
 							if let Some(locked_node) = locked_node_map.get(&child_id) {
 								if let Ok(encrypted) =
@@ -282,7 +273,7 @@ impl FileSystem {
 								{
 									let aes = aes_from_parent_seed_for_node(
 										seed,
-										child_id,
+										*child_id,
 										&encrypted.salt,
 									);
 
@@ -304,7 +295,7 @@ impl FileSystem {
 										};
 
 										new_nodes.push((child_id, child_node));
-										to_process.push(child_id);
+										to_process.push(*child_id);
 									}
 								}
 							}
@@ -315,25 +306,42 @@ impl FileSystem {
 
 			for (child_id, child_node) in new_nodes {
 				locked_node_map.remove(&child_id);
-				node_map.insert(child_id, child_node);
+				node_map.insert(*child_id, child_node);
 			}
 		}
 
-		let mut roots: Vec<Node> = vec![];
+		fn add_children(
+			node: &mut Node,
+			nodes: &mut HashMap<u128, Node>,
+			branches: &HashMap<u128, Vec<u128>>,
+		) {
+			if let Some(children_ids) = branches.get(&node.id) {
+				for &child_id in children_ids {
+					if let Some(mut child) = nodes.remove(&child_id) {
+						add_children(&mut child, nodes, branches);
 
-		for node_id in node_map.keys().cloned().collect::<Vec<u128>>() {
-			if let Some(node) = node_map.remove(&node_id) {
-				if let Some(parent_node) = node_map.get_mut(&node.parent_id) {
-					if let Entry::Dir { children, .. } = &mut parent_node.entry {
-						children.push(node);
+						if let Entry::Dir {
+							ref mut children, ..
+						} = node.entry
+						{
+							children.push(child);
+						}
 					}
-				} else {
-					roots.push(node);
 				}
 			}
 		}
 
-		FileSystem { roots }
+		let mut hierarchy = Vec::new();
+
+		for &root_id in &roots {
+			if let Some(mut root) = node_map.remove(&root_id) {
+				add_children(&mut root, &mut node_map, &branches);
+
+				hierarchy.push(root.clone());
+			}
+		}
+
+		FileSystem { roots: hierarchy }
 	}
 
 	pub fn ls_root(&self) -> Vec<&Node> {
@@ -409,12 +417,13 @@ impl FileSystem {
 	pub fn mkdir(&mut self, parent_id: u128, name: &str) -> Result<(u128, Vec<u8>), Error> {
 		if let Some(node) = self.node_by_id_mut(parent_id) {
 			if let Entry::Dir {
-				ref mut children, seed: ref parent_seed 
+				ref mut children,
+				seed: ref parent_seed,
 			} = node.entry
 			{
 				let id = id::generate();
 				let new_node = Node {
-					id ,
+					id,
 					parent_id,
 					created_at: now(),
 					name: name.to_string(),
@@ -423,7 +432,7 @@ impl FileSystem {
 						children: vec![],
 					},
 				};
-				let json = Self::encrypt_node_with_parent_seed(&new_node, parent_seed);
+				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed);
 
 				children.push(new_node);
 
@@ -445,7 +454,8 @@ impl FileSystem {
 	) -> Result<(u128, Vec<u8>), Error> {
 		if let Some(node) = self.node_by_id_mut(parent_id) {
 			if let Entry::Dir {
-				ref mut children, seed: ref parent_seed 
+				ref mut children,
+				seed: ref parent_seed,
 			} = node.entry
 			{
 				let id = id::generate();
@@ -463,7 +473,7 @@ impl FileSystem {
 						},
 					},
 				};
-				let json = Self::encrypt_node_with_parent_seed(&new_node, parent_seed);
+				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed);
 
 				children.push(new_node);
 
@@ -481,25 +491,77 @@ impl FileSystem {
 mod tests {
 	use super::*;
 
-	#[test]
-	fn test_create_and_mkdir() {
-		let seed = Seed::generate();
-		let mut fs = FileSystem::new(&seed).0;
+	fn is_dir(fs: &FileSystem, id: u128, name: &str, parent: u128) -> bool {
+		fs.node_by_id(id).map_or(false, |n| {
+			matches!(n.entry, Entry::Dir { .. }) && n.name == name && n.parent_id == parent
+		})
+	}
 
-		let _1 = fs.mkdir(0, "1").unwrap();
+	fn is_file(fs: &FileSystem, id: u128, name: &str, parent: u128) -> bool {
+		fs.node_by_id(id).map_or(false, |n| {
+			matches!(n.entry, Entry::File { .. }) && n.name == name && n.parent_id == parent
+		})
+	}
+
+	#[test]
+	fn test_create_mkdir_touch() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
 		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
 
-		assert!(true);
+		assert_eq!(fs.ls_dir(ROOT_ID).unwrap().len(), 1);
+		assert_eq!(fs.ls_dir(_1.0).unwrap().len(), 2);
+		assert_eq!(fs.ls_dir(_1_1.0).unwrap().len(), 1);
+		assert_eq!(fs.ls_dir(_1_2.0).unwrap().len(), 0);
+		assert_eq!(fs.ls_dir(_1_1_1.0).unwrap().len(), 1);
+		assert_eq!(fs.ls_dir(_1_1_1_atxt.0), Err(Error::BadOperation));
+
+		assert!(is_dir(&fs, ROOT_ID, "/", NO_PARENT_ID));
+		assert!(is_dir(&fs, _1.0, "1", ROOT_ID));
+		assert!(is_dir(&fs, _1_1.0, "1_1", _1.0));
+		assert!(is_dir(&fs, _1_2.0, "1_2", _1.0));
+		assert!(is_dir(&fs, _1_1_1.0, "1_1_1", _1_1.0));
+		assert!(is_file(&fs, _1_1_1_atxt.0, "a", _1_1_1.0));
 	}
-	// #[test]
-	// fn test_ls_root_empty() {
-	// 	let fs = FileSystem { nodes: vec![] };
-	// 	let root_entries = fs.ls_root();
-	// 	assert!(root_entries.is_empty());
-	// }
+
+	#[test]
+	fn test_from_locked_nodes_for_root() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_1_1.1,
+			&_1_2.1,
+			&_1_1_1.1,
+			&_1_1_1_atxt.1,
+		];
+
+		let bundles = vec![(ROOT_ID, seed)].into_iter().collect();
+		let restored = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert_eq!(fs, restored);
+	}
+
+	#[test]
+	fn test_ls_root_empty() {
+		let fs = FileSystem { roots: vec![] };
+		let root_entries = fs.ls_root();
+
+		assert!(root_entries.is_empty());
+	}
 
 	// fn create_entry(id: u128, parent_id: u128, name: &str) -> Node {
 	// 	Node {
@@ -626,8 +688,15 @@ mod tests {
 // 	Dir { seed: Seed, children: Vec<Node>, },
 // }
 
-// struct Node {
-// 	id: u128,
-// 	salt: Salt,
-// 	_type: NodeType,
-// }
+// fs:
+// 	docs/
+//		*invoices/
+//			*june.pdf
+//			*july.pdf
+//			*...
+//		contracts/
+//			*upgrade.pdf
+//			contractors.pdf
+//			*infra.pdf
+//	*recordings/
+//		*...

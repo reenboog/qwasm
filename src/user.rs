@@ -5,8 +5,9 @@ use crate::{
 	aes_gcm,
 	database::{self, SeedById},
 	encrypted, hkdf,
-	identity::Identity,
+	identity::{self, Identity},
 	password_lock,
+	register::LockedUser,
 	salt::Salt,
 	seeds::{self, Bundle, Invite, Seed, Share, ROOT_ID},
 };
@@ -265,9 +266,55 @@ impl User {
 	}
 }
 
+#[wasm_bindgen]
+pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
+	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
+	let decrypted_priv = password_lock::unlock(
+		serde_json::from_slice(&locked.encrypted_priv).map_err(|_| Error::BadJson)?,
+		pass,
+	)
+	.map_err(|_| Error::WrongPass)?;
+
+	let _priv: identity::Private =
+		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;
+
+	Ok(User {
+		identity: Identity {
+			_priv: _priv.clone(),
+			_pub: locked._pub,
+		},
+		shares: locked
+			.shares
+			.iter()
+			.filter_map(|s| {
+				if let Ok(ref bytes) = _priv.decrypt(&s.payload) {
+					if let Ok(bundle) = serde_json::from_slice::<Bundle>(bytes) {
+						Some(Share {
+							sender: s.sender.clone(),
+							bundle,
+						})
+					} else {
+						None
+					}
+				} else {
+					None
+				}
+			})
+			.collect(),
+		role: locked
+			.role
+			.as_str()
+			.try_into()
+			.map_err(|_| Error::UnknownRole)?,
+	})
+}
+
 #[cfg(test)]
 mod tests {
-	use crate::register::{register_as_admin, register_as_god, unlock_with_pass, Registered};
+	use crate::{
+		register::{register_as_admin, register_as_god, Registered},
+		user::unlock_with_pass,
+	};
 
 	#[test]
 	fn test_encrypt_announcement() {

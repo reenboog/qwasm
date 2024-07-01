@@ -31,12 +31,12 @@ impl From<Error> for JsValue {
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct LockedUser {
 	id: u128,
-	encrypted_priv: Vec<u8>,
+	pub(crate) encrypted_priv: Vec<u8>,
 	#[serde(rename = "pub")]
-	_pub: identity::Public,
+	pub(crate) _pub: identity::Public,
 	#[serde(rename = "type")]
-	role: String,
-	shares: Vec<LockedShare>,
+	pub(crate) role: String,
+	pub(crate) shares: Vec<LockedShare>,
 }
 
 #[wasm_bindgen]
@@ -118,50 +118,6 @@ fn register_with_params(
 	}
 }
 
-// FIXME: convert Uer to JsValue
-#[wasm_bindgen]
-pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
-	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
-	let decrypted_priv = password_lock::unlock(
-		serde_json::from_slice(&locked.encrypted_priv).map_err(|_| Error::BadJson)?,
-		pass,
-	)
-	.map_err(|_| Error::WrongPass)?;
-
-	let _priv: identity::Private =
-		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;
-
-	Ok(User {
-		identity: Identity {
-			_priv: _priv.clone(),
-			_pub: locked._pub,
-		},
-		shares: locked
-			.shares
-			.iter()
-			.filter_map(|s| {
-				if let Ok(ref bytes) = _priv.decrypt(&s.payload) {
-					if let Ok(bundle) = serde_json::from_slice::<Bundle>(bytes) {
-						Some(Share {
-							sender: s.sender.clone(),
-							bundle,
-						})
-					} else {
-						None
-					}
-				} else {
-					None
-				}
-			})
-			.collect(),
-		role: locked
-			.role
-			.as_str()
-			.try_into()
-			.map_err(|_| Error::UnknownRole)?,
-	})
-}
-
 /*
 
 	can A override seeds shared by B for C? - no, since they are shared individually
@@ -200,7 +156,9 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 
 #[cfg(test)]
 mod tests {
-	use super::{register_as_admin, register_as_god, unlock_with_pass, Registered};
+	use crate::user::{self};
+
+	use super::{register_as_admin, register_as_god, Registered};
 
 	#[test]
 	fn test_serialize_deserialize() {
@@ -218,7 +176,7 @@ mod tests {
 			locked_user: json,
 			user,
 		} = register_as_god(&pass);
-		let unlock = unlock_with_pass(pass, &json);
+		let unlock = user::unlock_with_pass(pass, &json);
 
 		assert_eq!(Ok(user), unlock);
 	}
@@ -239,7 +197,7 @@ mod tests {
 			user: admin,
 		} = register_as_admin(admin_pass, &invite, pin).unwrap();
 
-		let unlocked_admin = unlock_with_pass(admin_pass, &admin_json).unwrap();
+		let unlocked_admin = user::unlock_with_pass(admin_pass, &admin_json).unwrap();
 
 		assert_eq!(admin, unlocked_admin);
 	}
@@ -268,7 +226,7 @@ mod tests {
 			locked_user: new_admin_json,
 			user: new_admin,
 		} = register_as_admin(new_pass, &new_invite, new_pin).unwrap();
-		let new_unlocked_admin = unlock_with_pass(new_pass, &new_admin_json).unwrap();
+		let new_unlocked_admin = user::unlock_with_pass(new_pass, &new_admin_json).unwrap();
 
 		assert_eq!(new_admin, new_unlocked_admin);
 	}
