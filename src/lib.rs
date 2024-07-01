@@ -1,6 +1,6 @@
 // use wasm_bindgen::prelude::*;
+pub mod database;
 pub mod ed448;
-pub mod encrypt_db;
 pub mod hkdf;
 pub mod hmac;
 pub mod identity;
@@ -12,6 +12,7 @@ pub mod vault;
 pub mod x448;
 
 mod aes_gcm;
+mod encrypted;
 mod id;
 mod key;
 mod key_pair;
