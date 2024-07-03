@@ -1,10 +1,14 @@
 // FIXME: make all objects implement `free` – seems to be automatically implemented, is it not?
 // TODO: remove unused Serialized/Deserialized
 // TODO: use web_sys for storage and network?
+// FIXME: when dealing with bundles, don't forget about God who has none
+
+revoke access by encrypting new seeds to node's parent and putting it inside it?
 
 god_signup
 	gen_identity: enc & sig (priv + pub)
 	enc_priv_identity_with_pass
+	build_fs
 
 create_new_admin
 	select_seeds
@@ -15,6 +19,7 @@ new_admin_signup
 	decrypt_seeds_with_tmp_pass
 	enc_seeds_with_pub_identity
 	enc_priv_identity_with_pass
+	build_fs
 
 
 announcements

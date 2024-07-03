@@ -67,7 +67,7 @@ impl TryFrom<&str> for Role {
 }
 
 #[wasm_bindgen]
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct User {
 	pub(crate) identity: Identity,
 	// or rather a list of Bundles actually?
@@ -171,6 +171,7 @@ impl User {
 }
 
 impl User {
+	// may fail, if not enough acces
 	fn encrypt_db_entry(&self, table: &str, pt: &[u8], column: &str) -> Result<Vec<u8>, Error> {
 		let salt = Salt::generate();
 		let aes = self.aes_for_entry_in_table(table, column, salt.clone())?;
@@ -180,6 +181,7 @@ impl User {
 		Ok(serde_json::to_vec(&encrypted).unwrap())
 	}
 
+	// may fail, if not enough access
 	fn decrypt_db_entry(
 		&self,
 		table: &str,
@@ -221,6 +223,7 @@ impl User {
 		}) {
 			Ok(seed_from_root)
 		} else if self.role == Role::God {
+			// god doesn't keep bundles, so let's sue his seed directly
 			Ok(database::derive_entry_seed_from_root(
 				&self.db_seed(),
 				table,

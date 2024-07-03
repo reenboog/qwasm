@@ -40,7 +40,7 @@ pub struct LockedUser {
 }
 
 #[wasm_bindgen]
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(PartialEq, Debug)]
 pub struct Registered {
 	// to be sent to the backend
 	pub(crate) locked_user: Vec<u8>,
@@ -160,14 +160,14 @@ mod tests {
 
 	use super::{register_as_admin, register_as_god, Registered};
 
-	#[test]
-	fn test_serialize_deserialize() {
-		let reg = register_as_god("123");
-		let serialized = serde_json::to_vec(&reg).unwrap();
-		let deserielized = serde_json::from_slice(&serialized).unwrap();
+	// #[test]
+	// fn test_serialize_deserialize() {
+	// 	let reg = register_as_god("123");
+	// 	let serialized = serde_json::to_vec(&reg).unwrap();
+	// 	let deserielized = serde_json::from_slice(&serialized).unwrap();
 
-		assert_eq!(reg, deserielized);
-	}
+	// 	assert_eq!(reg, deserielized);
+	// }
 
 	#[test]
 	fn test_unlock() {

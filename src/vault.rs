@@ -6,12 +6,9 @@ use crate::{
 	hkdf::Hkdf,
 	id,
 	salt::Salt,
-	seeds::{self, Seed, Share, ROOT_ID},
+	seeds::{self, Seed, ROOT_ID},
 };
-// use js_sys::Date;
 use serde::{Deserialize, Serialize};
-
-// encrypted content: json {  }
 
 #[derive(PartialEq, Debug)]
 pub enum Error {
@@ -155,10 +152,12 @@ impl Node {
 }
 
 #[derive(PartialEq, Debug)]
-struct FileSystem {
+pub struct FileSystem {
 	// a user can have multiple top-level shares belonging to different
 	// subtrees, therefore more than one root is possible
 	roots: Vec<Node>,
+	// a cache of shares
+	cached_seeds: HashMap<u128, Seed>,
 }
 
 const NO_PARENT_ID: u128 = u128::MAX;
@@ -196,25 +195,40 @@ impl FileSystem {
 			},
 		};
 		let json = Node::encrypt(&node, fs_seed);
+		let cached_seeds = vec![(id, fs_seed.clone())].into_iter().collect();
 
-		(Self { roots: vec![node] }, json)
+		(
+			Self {
+				roots: vec![node],
+				cached_seeds,
+			},
+			json,
+		)
 	}
 
-	// always fetch all nodes, but build a tre based on shares
+	// always fetch all nodes, but build a tree based on shares
 	// TODO: for god, remember to pass one share { root_id: seed } manually
 	pub fn from_locked_nodes(
 		locked_nodes: &[&Vec<u8>],
 		bundles: &HashMap<u128, Seed>,
 	) -> FileSystem {
-		// let bundles = shares
-		// 	.iter()
-		// 	.map(|s| s.bundle.fs.clone())
-		// 	.flatten()
-		// 	.collect::<HashMap<_, _>>();
-		let locked_nodes = locked_nodes
+		let (mut nodes, branches, roots) = Self::parse_locked(locked_nodes, bundles);
+
+		FileSystem {
+			roots: Self::build_hierarchy(&mut nodes, &branches, &roots),
+			cached_seeds: bundles.clone(),
+		}
+	}
+
+	// returns (nodes, branches, roots)
+	fn parse_locked(
+		locked_nodes: &[&Vec<u8>],
+		bundles: &HashMap<u128, Seed>,
+	) -> (HashMap<u128, Node>, HashMap<u128, Vec<u128>>, Vec<u128>) {
+		let locked_nodes: Vec<LockedNode> = locked_nodes
 			.iter()
 			.filter_map(|bytes| serde_json::from_slice::<LockedNode>(bytes).ok())
-			.collect::<Vec<_>>();
+			.collect();
 
 		let mut node_map: HashMap<u128, Node> = HashMap::new();
 		let mut locked_node_map: HashMap<u128, &LockedNode> = HashMap::new();
@@ -310,20 +324,24 @@ impl FileSystem {
 			}
 		}
 
-		fn add_children(
+		(node_map, branches, roots)
+	}
+
+	fn build_hierarchy(
+		nodes: &mut HashMap<u128, Node>,
+		branches: &HashMap<u128, Vec<u128>>,
+		roots: &[u128],
+	) -> Vec<Node> {
+		fn add_children_to_node(
 			node: &mut Node,
 			nodes: &mut HashMap<u128, Node>,
 			branches: &HashMap<u128, Vec<u128>>,
 		) {
-			if let Some(children_ids) = branches.get(&node.id) {
-				for &child_id in children_ids {
-					if let Some(mut child) = nodes.remove(&child_id) {
-						add_children(&mut child, nodes, branches);
-
-						if let Entry::Dir {
-							ref mut children, ..
-						} = node.entry
-						{
+			if let Entry::Dir { children, .. } = &mut node.entry {
+				if let Some(children_ids) = branches.get(&node.id) {
+					for &child_id in children_ids {
+						if let Some(mut child) = nodes.remove(&child_id) {
+							add_children_to_node(&mut child, nodes, branches);
 							children.push(child);
 						}
 					}
@@ -333,15 +351,14 @@ impl FileSystem {
 
 		let mut hierarchy = Vec::new();
 
-		for &root_id in &roots {
-			if let Some(mut root) = node_map.remove(&root_id) {
-				add_children(&mut root, &mut node_map, &branches);
-
-				hierarchy.push(root.clone());
+		for &root_id in roots {
+			if let Some(mut root) = nodes.remove(&root_id) {
+				add_children_to_node(&mut root, nodes, branches);
+				hierarchy.push(root);
 			}
 		}
 
-		FileSystem { roots: hierarchy }
+		hierarchy
 	}
 
 	pub fn ls_root(&self) -> Vec<&Node> {
@@ -413,7 +430,6 @@ impl FileSystem {
 		}
 	}
 
-	// FIXME: return new parent?
 	pub fn mkdir(&mut self, parent_id: u128, name: &str) -> Result<(u128, Vec<u8>), Error> {
 		if let Some(node) = self.node_by_id_mut(parent_id) {
 			if let Entry::Dir {
@@ -485,6 +501,29 @@ impl FileSystem {
 			Err(Error::NotFound)
 		}
 	}
+
+	// TODO: use RefCell and immutable self instead?
+	pub fn share_node(&mut self, id: u128) -> Result<Seed, Error> {
+		if let Some(seed) = self.cached_seeds.get(&id) {
+			Ok(seed.clone())
+		} else if let Some(node) = self.node_by_id(id) {
+			if let Some(parent) = self.node_by_id(node.parent_id) {
+				if let Entry::Dir { ref seed, .. } = parent.entry {
+					let share = seed_from_parent_for_node(seed, id);
+
+					self.cached_seeds.insert(id, share.clone());
+
+					Ok(share)
+				} else {
+					Err(Error::BadOperation)
+				}
+			} else {
+				Err(Error::NoAccess)
+			}
+		} else {
+			Err(Error::NoAccess)
+		}
+	}
 }
 
 #[cfg(test)]
@@ -549,15 +588,49 @@ mod tests {
 			&_1_1_1_atxt.1,
 		];
 
-		let bundles = vec![(ROOT_ID, seed)].into_iter().collect();
+		let bundles = vec![(ROOT_ID, seed.clone())].into_iter().collect();
 		let restored = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
 
 		assert_eq!(fs, restored);
 	}
 
+	fn eval_share(fs: &mut FileSystem, id: u128, parent_id: u128) -> bool {
+		let share = fs.share_node(id).unwrap();
+
+		matches!(fs.node_by_id(parent_id).unwrap().entry, Entry::Dir { ref seed, .. } if seed_from_parent_for_node(seed, id) == share)
+	}
+
+	#[test]
+	fn test_share() {
+		let seed = Seed::generate();
+		let (mut fs, _) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+
+		assert!(eval_share(&mut fs, _1_1_1_atxt.0, _1_1_1.0));
+		assert!(eval_share(&mut fs, _1_1_1.0, _1_1.0));
+		assert!(eval_share(&mut fs, _1_1.0, _1.0));
+		assert!(eval_share(&mut fs, _1_2.0, _1.0));
+		assert!(eval_share(&mut fs, _1.0, ROOT_ID));
+		assert_eq!(fs.share_node(ROOT_ID), Ok(seed));
+
+		assert!(!eval_share(&mut fs, _1_1_1_atxt.0, _1.0));
+		assert!(!eval_share(&mut fs, _1_1_1.0, _1_2.0));
+		assert!(!eval_share(&mut fs, _1_1.0, ROOT_ID));
+		assert!(!eval_share(&mut fs, _1_2.0, _1_2.0));
+		assert!(!eval_share(&mut fs, _1.0, _1_1_1.0));
+	}
+
 	#[test]
 	fn test_ls_root_empty() {
-		let fs = FileSystem { roots: vec![] };
+		let fs = FileSystem {
+			roots: vec![],
+			cached_seeds: HashMap::new(),
+		};
 		let root_entries = fs.ls_root();
 
 		assert!(root_entries.is_empty());
