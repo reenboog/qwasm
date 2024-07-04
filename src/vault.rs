@@ -12,11 +12,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Debug)]
 pub enum Error {
-	NoAccess,
+	NotFound,
 	// TODO: add a description
 	BadOperation,
 	// TODO: add id
-	NotFound,
+	NoAccess,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -241,8 +241,6 @@ impl FileSystem {
 					.entry(locked_node.parent_id)
 					.or_default()
 					.push(locked_node.id);
-			} else {
-				roots.push(locked_node.id);
 			}
 
 			locked_node_map.insert(locked_node.id, locked_node);
@@ -324,6 +322,13 @@ impl FileSystem {
 			}
 		}
 
+		for (id, node) in &node_map {
+			if !node_map.contains_key(&node.parent_id) {
+				roots.push(*id);
+			}
+		}
+
+		// (node_map, branches, bundles.keys().cloned().collect()
 		(node_map, branches, roots)
 	}
 
@@ -351,6 +356,7 @@ impl FileSystem {
 
 		let mut hierarchy = Vec::new();
 
+		// FIXME: this piece is not exactly correct: it may still build [grandchild, child, parent, grandparent]
 		for &root_id in roots {
 			if let Some(mut root) = nodes.remove(&root_id) {
 				add_children_to_node(&mut root, nodes, branches);
@@ -457,7 +463,7 @@ impl FileSystem {
 				Err(Error::BadOperation)
 			}
 		} else {
-			Err(Error::NotFound)
+			Err(Error::NoAccess)
 		}
 	}
 
@@ -498,7 +504,7 @@ impl FileSystem {
 				Err(Error::BadOperation)
 			}
 		} else {
-			Err(Error::NotFound)
+			Err(Error::NoAccess)
 		}
 	}
 
@@ -518,10 +524,11 @@ impl FileSystem {
 					Err(Error::BadOperation)
 				}
 			} else {
+				// we'll probably never get here
 				Err(Error::NoAccess)
 			}
 		} else {
-			Err(Error::NoAccess)
+			Err(Error::NotFound)
 		}
 	}
 }
@@ -545,7 +552,7 @@ mod tests {
 	#[test]
 	fn test_create_mkdir_touch() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, _) = FileSystem::new(&seed);
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -601,7 +608,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_share() {
+	fn test_share_individual_nodes() {
 		let seed = Seed::generate();
 		let (mut fs, _) = FileSystem::new(&seed);
 
@@ -626,6 +633,396 @@ mod tests {
 	}
 
 	#[test]
+	fn test_share_a_file() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+
+		let share = fs.share_node(_1_1_1_atxt.0).unwrap();
+		let locked_nodes = vec![
+			&root_json,
+			&_1_1_1_atxt.1,
+			&_1.1,
+			&_1_1_1.1,
+			&_1_2.1,
+			&_1_1.1,
+		];
+		let bundles = vec![(_1_1_1_atxt.0, share)].into_iter().collect();
+
+		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
+		assert_eq!(
+			fs_partial.ls_root(),
+			vec![fs_partial.node_by_id(_1_1_1_atxt.0).unwrap()]
+		);
+	}
+
+	#[test]
+	fn test_share_several_files_detached_as_roots() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_ctxt = fs.touch(_1_1.0, "c", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+
+		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
+		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
+		let _1_1_a_share = fs.share_node(_1_1_ctxt.0).unwrap();
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_1_2.1,
+			&_1_1.1,
+			&_1_1_1_atxt.1,
+			&_1_1_1.1,
+			&_1_1_1_btxt.1,
+			&_1_1_ctxt.1,
+		];
+		let bundles = vec![
+			(_1_1_1_atxt.0, _1_1_1_a_share),
+			(_1_1_ctxt.0, _1_1_a_share),
+			(_1_1_1_btxt.0, _1_1_1_b_share),
+		]
+		.into_iter()
+		.collect();
+
+		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
+		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
+		assert!(is_file(&fs_partial, _1_1_ctxt.0, "c", _1_1.0));
+		assert!(fs_partial.ls_root().iter().map(|n| n.id).all(|id| [
+			_1_1_1_atxt.0,
+			_1_1_1_btxt.0,
+			_1_1_ctxt.0
+		]
+		.contains(&id)));
+	}
+
+	#[test]
+	fn test_share_several_dirs_detached_as_roots() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+
+		let _1_1_1_share = fs.share_node(_1_1_1.0).unwrap();
+		let _1_2_share = fs.share_node(_1_2.0).unwrap();
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_1_2.1,
+			&_1_1.1,
+			&_1_1_1_atxt.1,
+			&_1_1_1.1,
+			&_1_1_1_btxt.1,
+			&_1_1_atxt.1,
+		];
+		let bundles = vec![(_1_1_1.0, _1_1_1_share), (_1_2.0, _1_2_share)]
+			.into_iter()
+			.collect();
+
+		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_dir(&fs_partial, _1_1_1.0, "1_1_1", _1_1.0));
+		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
+		assert!(fs_partial
+			.ls_root()
+			.iter()
+			.map(|n| n.id)
+			.all(|id| [_1_1_1.0, _1_2.0].contains(&id)));
+	}
+
+	#[test]
+	fn test_share_mixed() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
+
+		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
+		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
+		let _1_2_share = fs.share_node(_1_2.0).unwrap();
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_1_2.1,
+			&_1_1.1,
+			&_1_1_1_1.1,
+			&_1_1_1_atxt.1,
+			&_1_1_1.1,
+			&_1_1_1_btxt.1,
+			&_1_1_atxt.1,
+		];
+		let bundles = vec![
+			(_1_1_1_atxt.0, _1_1_1_a_share),
+			(_1_1_1_btxt.0, _1_1_1_b_share),
+			(_1_2.0, _1_2_share),
+		]
+		.into_iter()
+		.collect();
+
+		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
+		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
+		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
+		assert!(fs_partial.ls_root().iter().map(|n| n.id).all(|id| [
+			_1_1_1_atxt.0,
+			_1_1_1_btxt.0,
+			_1_2.0
+		]
+		.contains(&id)));
+	}
+
+	#[test]
+	fn test_errors() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
+
+		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
+		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
+		let _1_2_share = fs.share_node(_1_2.0).unwrap();
+
+		assert_eq!(fs.share_node(9999999), Err(Error::NotFound));
+		assert_eq!(fs.mkdir(_1_1_1_atxt.0, "bad"), Err(Error::BadOperation));
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_1_2.1,
+			&_1_1.1,
+			&_1_1_1_1.1,
+			&_1_1_1_atxt.1,
+			&_1_1_1.1,
+			&_1_1_1_btxt.1,
+			&_1_1_atxt.1,
+		];
+		let bundles = vec![
+			(_1_1_1_atxt.0, _1_1_1_a_share.clone()),
+			(_1_1_1_btxt.0, _1_1_1_b_share.clone()),
+			(_1_2.0, _1_2_share.clone()),
+		]
+		.into_iter()
+		.collect();
+
+		let mut fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
+		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
+		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
+		assert!(fs_partial.ls_root().iter().map(|n| n.id).all(|id| [
+			_1_1_1_atxt.0,
+			_1_1_1_btxt.0,
+			_1_2.0
+		]
+		.contains(&id)));
+
+		// _1 is not in the hierarchy
+		assert_eq!(fs_partial.share_node(_1.0), Err(Error::NotFound));
+		// these are is in the cache, so can be shared
+		assert_eq!(fs_partial.share_node(_1_2.0), Ok(_1_2_share));
+		assert_eq!(fs_partial.share_node(_1_1_1_atxt.0), Ok(_1_1_1_a_share));
+		assert_eq!(fs_partial.share_node(_1_1_1_btxt.0), Ok(_1_1_1_b_share));
+	}
+
+	#[test]
+	fn test_share_parents_and_children() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
+
+		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
+		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
+		let _1_2_share = fs.share_node(_1_2.0).unwrap();
+		let _1_share = fs.share_node(_1.0).unwrap();
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_1_2.1,
+			&_1_1.1,
+			&_1_1_1_1.1,
+			&_1_1_1_atxt.1,
+			&_1_1_1.1,
+			&_1_1_1_btxt.1,
+			&_1_1_atxt.1,
+		];
+		let bundles = vec![
+			(_1_1_1_atxt.0, _1_1_1_a_share),
+			(_1_1_1_btxt.0, _1_1_1_b_share),
+			(_1_2.0, _1_2_share),
+			(_1.0, _1_share),
+		]
+		.into_iter()
+		.collect();
+
+		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_dir(&fs_partial, _1.0, "1", ROOT_ID));
+		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
+		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
+		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
+		assert_eq!(
+			fs_partial.ls_root(),
+			vec![fs_partial.node_by_id(_1.0).unwrap()]
+		);
+	}
+
+	#[test]
+	fn test_share_distant_relatives() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
+
+		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
+		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
+		let root_share = fs.share_node(ROOT_ID).unwrap();
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_1_2.1,
+			&_1_1.1,
+			&_1_1_1_1.1,
+			&_1_1_1_atxt.1,
+			&_1_1_1.1,
+			&_1_1_1_btxt.1,
+			&_1_1_atxt.1,
+		];
+		let bundles = vec![
+			(_1_1_1_atxt.0, _1_1_1_a_share),
+			(_1_1_1_btxt.0, _1_1_1_b_share),
+			(ROOT_ID, root_share),
+		]
+		.into_iter()
+		.collect();
+
+		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_dir(&fs_partial, ROOT_ID, "/", NO_PARENT_ID));
+		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
+		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
+		assert!(fs_partial
+			.ls_root()
+			.iter()
+			.map(|n| n.id)
+			.all(|id| [_1.0].contains(&id)));
+	}
+
+	#[test]
+	fn test_share_root_and_children() {
+		let seed = Seed::generate();
+		let (mut fs, root_json) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _2 = fs.mkdir(ROOT_ID, "2").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
+
+		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
+		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
+		let _1_2_share = fs.share_node(_1_2.0).unwrap();
+		let _1_share = fs.share_node(_1.0).unwrap();
+		let root_share = fs.share_node(ROOT_ID).unwrap();
+
+		let locked_nodes = vec![
+			&root_json,
+			&_1.1,
+			&_2.1,
+			&_1_2.1,
+			&_1_1.1,
+			&_1_1_1_1.1,
+			&_1_1_1_atxt.1,
+			&_1_1_1.1,
+			&_1_1_1_btxt.1,
+			&_1_1_atxt.1,
+		];
+		let bundles = vec![
+			(_1_1_1_atxt.0, _1_1_1_a_share),
+			(_1_1_1_btxt.0, _1_1_1_b_share),
+			(ROOT_ID, root_share),
+			(_1_2.0, _1_2_share),
+			(_1.0, _1_share),
+		]
+		.into_iter()
+		.collect();
+
+		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+
+		assert!(is_dir(&fs_partial, ROOT_ID, "/", NO_PARENT_ID));
+		assert!(is_dir(&fs_partial, _1.0, "1", ROOT_ID));
+		assert!(is_dir(&fs_partial, _2.0, "2", ROOT_ID));
+		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
+		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
+		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
+
+		// root has _1 and _2 in it
+		assert!(fs_partial
+			.ls_root()
+			.iter()
+			.map(|n| n.id)
+			.all(|id| [_1.0, _2.0].contains(&id)));
+	}
+
+	#[test]
 	fn test_ls_root_empty() {
 		let fs = FileSystem {
 			roots: vec![],
@@ -635,141 +1032,4 @@ mod tests {
 
 		assert!(root_entries.is_empty());
 	}
-
-	// fn create_entry(id: u128, parent_id: u128, name: &str) -> Node {
-	// 	Node {
-	// 		header: Header {
-	// 			id,
-	// 			parent_id,
-	// 			// salt: Salt::generate(),
-	// 		},
-	// 		content: Content {
-	// 			created_at: 0,
-	// 			name: name.to_string(),
-	// 			_type: LockedEntry::Dir {
-	// 				seed: Seed::generate(),
-	// 			},
-	// 		},
-	// 	}
-	// }
-
-	// #[test]
-	// fn test_ls_root_several_nodes_no_parent() {
-	// 	let fs = FileSystem {
-	// 		nodes: vec![
-	// 			create_entry(1, 0, "1"),
-	// 			create_entry(2, 3, "2"),
-	// 			create_entry(3, 0, "3"),
-	// 			create_entry(4, 1, "4"),
-	// 			create_entry(5, 12, "5"),
-	// 		],
-	// 	};
-	// 	let root_entries = fs.ls_root();
-	// 	let root_ids: Vec<u128> = root_entries.iter().map(|e| e.header.id).collect();
-
-	// 	assert_eq!(root_ids.len(), 3);
-	// 	assert!(root_ids.contains(&1));
-	// 	assert!(root_ids.contains(&3));
-	// 	assert!(root_ids.contains(&5));
-	// }
-
-	// #[test]
-	// fn test_ls_root_one_node_no_parent() {
-	// 	let fs = FileSystem {
-	// 		nodes: vec![create_entry(1, 100, "root")],
-	// 	};
-	// 	let root_entries = fs.ls_root();
-	// 	let root_ids: Vec<u128> = root_entries.iter().map(|e| e.header.id).collect();
-
-	// 	assert_eq!(root_ids.len(), 1);
-	// 	assert_eq!(root_ids[0], 1);
-	// }
-
-	// #[test]
-	// fn test_ls_dir_empty() {
-	// 	let fs = FileSystem { nodes: vec![] };
-	// 	let dir_entries = fs.ls_dir(1);
-	// 	assert!(dir_entries.is_empty());
-	// }
-
-	// #[test]
-	// fn test_ls_dir_no_children() {
-	// 	let fs = FileSystem {
-	// 		nodes: vec![
-	// 			create_entry(1, 0, "root1"),
-	// 			create_entry(2, 3, "child1"),
-	// 			create_entry(3, 0, "root2"),
-	// 		],
-	// 	};
-	// 	let dir_entries = fs.ls_dir(1);
-	// 	assert!(dir_entries.is_empty());
-	// }
-
-	// #[test]
-	// fn test_ls_dir_with_children() {
-	// 	let fs = FileSystem {
-	// 		nodes: vec![
-	// 			create_entry(1, 0, "root1"),
-	// 			create_entry(2, 1, "child1"),
-	// 			create_entry(3, 1, "child2"),
-	// 			create_entry(4, 2, "grandchild1"),
-	// 			create_entry(5, 3, "child3"),
-	// 		],
-	// 	};
-	// 	let dir_entries = fs.ls_dir(1);
-	// 	let dir_ids: Vec<u128> = dir_entries.iter().map(|e| e.header.id).collect();
-
-	// 	assert_eq!(dir_ids.len(), 2);
-	// 	assert!(dir_ids.contains(&2));
-	// 	assert!(dir_ids.contains(&3));
-	// }
-
-	// #[test]
-	// fn test_ls_dir_with_grandchildren() {
-	// 	let fs = FileSystem {
-	// 		nodes: vec![
-	// 			create_entry(1, 0, "root1"),
-	// 			create_entry(2, 1, "child1"),
-	// 			create_entry(3, 2, "grandchild1"),
-	// 			create_entry(4, 1, "child2"),
-	// 			create_entry(5, 3, "greatgrandchild1"),
-	// 		],
-	// 	};
-	// 	let dir_entries = fs.ls_dir(2);
-	// 	let dir_ids: Vec<u128> = dir_entries.iter().map(|e| e.header.id).collect();
-
-	// 	assert_eq!(dir_ids.len(), 1);
-	// 	assert!(dir_ids.contains(&3));
-	// }
-
-	// #[test]
-	// fn test_ls_dir_invalid_id() {
-	// 	let fs = FileSystem {
-	// 		nodes: vec![
-	// 			create_entry(1, 0, "root1"),
-	// 			create_entry(2, 1, "child1"),
-	// 			create_entry(3, 1, "child2"),
-	// 		],
-	// 	};
-	// 	let dir_entries = fs.ls_dir(99); // id that doesn't exist
-	// 	assert!(dir_entries.is_empty());
-	// }
 }
-
-// enum NodeType {
-// 	File { id: u128, key_iv: Seed, preview: Option<Preview>, },
-// 	Dir { seed: Seed, children: Vec<Node>, },
-// }
-
-// fs:
-// 	docs/
-//		*invoices/
-//			*june.pdf
-//			*july.pdf
-//			*...
-//		contracts/
-//			*upgrade.pdf
-//			contractors.pdf
-//			*infra.pdf
-//	*recordings/
-//		*...
