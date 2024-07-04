@@ -6,7 +6,7 @@ use crate::{
 	hkdf::Hkdf,
 	id,
 	salt::Salt,
-	seeds::{self, Seed, ROOT_ID},
+	seeds::{self, Seed, Seeds, ROOT_ID},
 };
 use serde::{Deserialize, Serialize};
 
@@ -157,7 +157,7 @@ pub struct FileSystem {
 	// subtrees, therefore more than one root is possible
 	roots: Vec<Node>,
 	// a cache of shares
-	cached_seeds: HashMap<u128, Seed>,
+	cached_seeds: Seeds,
 }
 
 const NO_PARENT_ID: u128 = u128::MAX;
@@ -208,10 +208,7 @@ impl FileSystem {
 
 	// always fetch all nodes, but build a tree based on shares
 	// TODO: for god, remember to pass one share { root_id: seed } manually
-	pub fn from_locked_nodes(
-		locked_nodes: &[&Vec<u8>],
-		bundles: &HashMap<u128, Seed>,
-	) -> FileSystem {
+	pub fn from_locked_nodes(locked_nodes: &[&Vec<u8>], bundles: &Seeds) -> FileSystem {
 		let (mut nodes, branches, roots) = Self::parse_locked(locked_nodes, bundles);
 
 		FileSystem {
@@ -223,7 +220,7 @@ impl FileSystem {
 	// returns (nodes, branches, roots)
 	fn parse_locked(
 		locked_nodes: &[&Vec<u8>],
-		bundles: &HashMap<u128, Seed>,
+		bundles: &Seeds,
 	) -> (HashMap<u128, Node>, HashMap<u128, Vec<u128>>, Vec<u128>) {
 		let locked_nodes: Vec<LockedNode> = locked_nodes
 			.iter()

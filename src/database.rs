@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
 	hkdf, id,
 	salt::Salt,
-	seeds::{self, Seed},
+	seeds::{self, Seed, Seeds},
 };
 
 // id	name	*email					age	*salary	position	*address	salt/iv (32 btes)
@@ -19,13 +17,17 @@ use crate::{
 // h_column = h(h_table + column_name)
 // h_item = h(h_column + item_salt)
 
+pub struct Database {
+	pub(crate) seeds: Seeds,
+}
+
 pub trait SeedById {
 	fn seed_by_id<F>(&self, id: u128, derive_fn: F) -> Option<Seed>
 	where
 		F: Fn(&Seed) -> Seed;
 }
 
-impl SeedById for Vec<HashMap<u128, Seed>> {
+impl SeedById for Vec<Seeds> {
 	fn seed_by_id<F>(&self, id: u128, derive: F) -> Option<Seed>
 	where
 		F: Fn(&Seed) -> Seed,
@@ -34,7 +36,7 @@ impl SeedById for Vec<HashMap<u128, Seed>> {
 	}
 }
 
-pub fn seed_by_id<F>(bundles: &Vec<HashMap<u128, Seed>>, id: u128, derive_fn: F) -> Option<Seed>
+pub fn seed_by_id<F>(bundles: &Vec<Seeds>, id: u128, derive_fn: F) -> Option<Seed>
 where
 	F: Fn(&Seed) -> Seed,
 {

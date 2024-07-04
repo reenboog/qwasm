@@ -47,27 +47,29 @@ pub struct Invite {
 	// sig
 }
 
+pub type Seeds = HashMap<u128, Seed>;
+
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Bundle {
 	// seeds for the filesystem; a key equals to all zeroes is a root key
 	// can be root
 	// dir
 	// file
-	pub fs: HashMap<u128, Seed>,
+	pub fs: Seeds,
 	// seeds for the database; a key equals to all zeroes is a root key
 
 	// can be root
 	// table
 	// column
 	// or entry? -rather no
-	pub db: HashMap<u128, Seed>,
+	pub db: Seeds,
 }
 
 impl Bundle {
 	pub(crate) fn new() -> Self {
 		Self {
-			fs: HashMap::new(),
-			db: HashMap::new(),
+			fs: Seeds::new(),
+			db: Seeds::new(),
 		}
 	}
 
