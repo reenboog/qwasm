@@ -9,6 +9,7 @@ use crate::{
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Identity {
+	// TODO: introduce Kyber?
 	pub(crate) _priv: Private,
 	pub(crate) _pub: Public,
 }

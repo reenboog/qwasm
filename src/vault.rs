@@ -21,6 +21,7 @@ pub enum Error {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct FileInfo {
+	// TODO: add file size
 	uri_id: u128,
 	key_iv: Aes,
 	ext: String,
@@ -30,6 +31,8 @@ pub struct FileInfo {
 #[derive(Serialize, Deserialize)]
 pub enum LockedEntry {
 	File { info: FileInfo },
+	// seed does not improve encryption strength directly, but
+	// rather increases subsequent entropy
 	Dir { seed: Seed },
 }
 

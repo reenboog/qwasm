@@ -73,11 +73,13 @@ pub struct User {
 	// or rather a list of Bundles actually?
 	// FIXME: do I need to keep the shares or rebuild fs tree and db tree on unlock?
 	// when unlocking, I may rebuikd the whole hierarchy for both db and fs by requesting a schema and a file tree
+	// TODO: probably keep the shares all the time in case access is revoked or regranted
 	pub(crate) shares: Vec<Share>,
 	pub(crate) role: Role,
 }
 
 impl User {
+	// TODO: fs and db is required here; hence return Result?
 	fn seeds_for_ids(&self, _fs_ids: &[u128], _db_ids: &[u128]) -> Bundle {
 		match self.role {
 			Role::God => {
@@ -270,6 +272,7 @@ impl User {
 }
 
 #[wasm_bindgen]
+// I'm already authenticated, so should it be fine to request all locked nodes as well?
 pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
 	let decrypted_priv = password_lock::unlock(

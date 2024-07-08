@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 
 use crate::{
-	identity::{self, Identity},
+	identity::{self},
 	password_lock,
 	seeds::{Bundle, Invite, LockedShare, Share},
 	user::{self, User},
@@ -37,6 +37,8 @@ pub struct LockedUser {
 	#[serde(rename = "type")]
 	pub(crate) role: String,
 	pub(crate) shares: Vec<LockedShare>,
+	// TODO: request locked nodes here optionally as well?
+	// an idea to rely on LockedEntries for both, db and fs, seems useful
 }
 
 #[wasm_bindgen]

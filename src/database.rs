@@ -36,13 +36,6 @@ impl SeedById for Vec<Seeds> {
 	}
 }
 
-pub fn seed_by_id<F>(bundles: &Vec<Seeds>, id: u128, derive_fn: F) -> Option<Seed>
-where
-	F: Fn(&Seed) -> Seed,
-{
-	bundles.iter().find_map(|b| b.get(&id).map(&derive_fn))
-}
-
 pub fn derive_table_seed_from_root(root: &Seed, table_name: &str) -> Seed {
 	Seed {
 		bytes: hkdf::Hkdf::from_ikm(&[root.bytes.as_slice(), table_name.as_bytes()].concat())

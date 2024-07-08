@@ -49,7 +49,14 @@ id: 6: name: signed, subdirs: [], files: [a7]
 { pictures, dicuments, 45544, .dir { seed: ssssss, name: pictures } }
 { photos, pictures, 33222, .dir { seed: kkkkk, name: photos } }
 
+parent_seed adds entropy a bit, but does not necessarily improve security 
 k = h(h(parent_seed + id) + iv)
+
+I could also go by:
+h_node = h(h_parent + id)
+key = h(h_node + salt)
+by the first scheme relies on encryted seed which makes it a bit stronger
+
 
 { id, parent, salt, content }
 { id, parent, salt, content }
