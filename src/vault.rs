@@ -22,7 +22,7 @@ pub enum Error {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct FileInfo {
 	// TODO: add file size
-	uri_id: u128,
+	uri_id: u64,
 	key_iv: Aes,
 	ext: String,
 	thumbnail: Vec<u8>,
@@ -38,8 +38,8 @@ pub enum LockedEntry {
 
 #[derive(Serialize, Deserialize)]
 struct LockedNode {
-	id: u128,
-	parent_id: u128,
+	id: u64,
+	parent_id: u64,
 	content: Vec<u8>,
 }
 
@@ -63,8 +63,8 @@ impl LockedContent {
 
 #[derive(Clone, PartialEq, Debug)]
 struct Node {
-	id: u128,
-	parent_id: u128,
+	id: u64,
+	parent_id: u64,
 	created_at: u64,
 	name: String,
 	entry: Entry,
@@ -100,14 +100,14 @@ impl PartialEq for Entry {
 }
 
 // Use to share access to a particular file/dir and paste to aes_from_node_seed_and_salt
-fn seed_from_parent_for_node(parent: &Seed, id: u128) -> Seed {
+fn seed_from_parent_for_node(parent: &Seed, id: u64) -> Seed {
 	Seed {
 		bytes: Hkdf::from_ikm(&[parent.bytes.as_slice(), &id.to_be_bytes()].concat())
 			.expand_no_info::<{ seeds::SEED_SIZE }>(),
 	}
 }
 
-fn aes_from_parent_seed_for_node(seed: &Seed, id: u128, salt: &Salt) -> Aes {
+fn aes_from_parent_seed_for_node(seed: &Seed, id: u64, salt: &Salt) -> Aes {
 	let node_seed = seed_from_parent_for_node(seed, id);
 
 	aes_from_node_seed(&node_seed, salt)
@@ -163,7 +163,7 @@ pub struct FileSystem {
 	cached_seeds: Seeds,
 }
 
-const NO_PARENT_ID: u128 = u128::MAX;
+const NO_PARENT_ID: u64 = u64::MAX;
 
 #[cfg(target_arch = "wasm32")]
 fn now() -> u64 {
@@ -224,15 +224,15 @@ impl FileSystem {
 	fn parse_locked(
 		locked_nodes: &[&Vec<u8>],
 		bundles: &Seeds,
-	) -> (HashMap<u128, Node>, HashMap<u128, Vec<u128>>, Vec<u128>) {
+	) -> (HashMap<u64, Node>, HashMap<u64, Vec<u64>>, Vec<u64>) {
 		let locked_nodes: Vec<LockedNode> = locked_nodes
 			.iter()
 			.filter_map(|bytes| serde_json::from_slice::<LockedNode>(bytes).ok())
 			.collect();
 
-		let mut node_map: HashMap<u128, Node> = HashMap::new();
-		let mut locked_node_map: HashMap<u128, &LockedNode> = HashMap::new();
-		let mut branches: HashMap<u128, Vec<u128>> = HashMap::new();
+		let mut node_map: HashMap<u64, Node> = HashMap::new();
+		let mut locked_node_map: HashMap<u64, &LockedNode> = HashMap::new();
+		let mut branches: HashMap<u64, Vec<u64>> = HashMap::new();
 		let mut roots = Vec::new();
 
 		for locked_node in &locked_nodes {
@@ -270,7 +270,7 @@ impl FileSystem {
 			}
 		}
 
-		let mut to_process: Vec<u128> = node_map.keys().cloned().collect();
+		let mut to_process: Vec<u64> = node_map.keys().cloned().collect();
 
 		while let Some(id) = to_process.pop() {
 			let mut new_nodes = Vec::new();
@@ -333,14 +333,14 @@ impl FileSystem {
 	}
 
 	fn build_hierarchy(
-		nodes: &mut HashMap<u128, Node>,
-		branches: &HashMap<u128, Vec<u128>>,
-		roots: &[u128],
+		nodes: &mut HashMap<u64, Node>,
+		branches: &HashMap<u64, Vec<u64>>,
+		roots: &[u64],
 	) -> Vec<Node> {
 		fn add_children_to_node(
 			node: &mut Node,
-			nodes: &mut HashMap<u128, Node>,
-			branches: &HashMap<u128, Vec<u128>>,
+			nodes: &mut HashMap<u64, Node>,
+			branches: &HashMap<u64, Vec<u64>>,
 		) {
 			if let Entry::Dir { children, .. } = &mut node.entry {
 				if let Some(children_ids) = branches.get(&node.id) {
@@ -387,11 +387,11 @@ impl FileSystem {
 		}
 	}
 
-	pub fn node_by_id(&self, id: u128) -> Option<&Node> {
+	pub fn node_by_id(&self, id: u64) -> Option<&Node> {
 		self.roots.iter().find_map(|node| self.dfs(node, id))
 	}
 
-	fn dfs<'a>(&self, node: &'a Node, id: u128) -> Option<&'a Node> {
+	fn dfs<'a>(&self, node: &'a Node, id: u64) -> Option<&'a Node> {
 		if node.id == id {
 			return Some(node);
 		}
@@ -406,7 +406,7 @@ impl FileSystem {
 		None
 	}
 
-	pub fn node_by_id_mut(&mut self, id: u128) -> Option<&mut Node> {
+	pub fn node_by_id_mut(&mut self, id: u64) -> Option<&mut Node> {
 		let mut stack: Vec<&mut Node> = self.roots.iter_mut().collect();
 
 		while let Some(node) = stack.pop() {
@@ -424,7 +424,7 @@ impl FileSystem {
 		None
 	}
 
-	pub fn ls_dir(&self, id: u128) -> Result<Vec<&Node>, Error> {
+	pub fn ls_dir(&self, id: u64) -> Result<Vec<&Node>, Error> {
 		if let Some(node) = self.node_by_id(id) {
 			if let Entry::Dir { ref children, .. } = node.entry {
 				Ok(children.iter().collect())
@@ -436,7 +436,7 @@ impl FileSystem {
 		}
 	}
 
-	pub fn mkdir(&mut self, parent_id: u128, name: &str) -> Result<(u128, Vec<u8>), Error> {
+	pub fn mkdir(&mut self, parent_id: u64, name: &str) -> Result<(u64, Vec<u8>), Error> {
 		if let Some(node) = self.node_by_id_mut(parent_id) {
 			if let Entry::Dir {
 				ref mut children,
@@ -469,11 +469,11 @@ impl FileSystem {
 
 	pub fn touch(
 		&mut self,
-		parent_id: u128,
+		parent_id: u64,
 		name: &str,
 		ext: &str,
 		thumbnail: &[u8],
-	) -> Result<(u128, Vec<u8>), Error> {
+	) -> Result<(u64, Vec<u8>), Error> {
 		if let Some(node) = self.node_by_id_mut(parent_id) {
 			if let Entry::Dir {
 				ref mut children,
@@ -509,7 +509,7 @@ impl FileSystem {
 	}
 
 	// TODO: use RefCell and immutable self instead?
-	pub fn share_node(&mut self, id: u128) -> Result<Seed, Error> {
+	pub fn share_node(&mut self, id: u64) -> Result<Seed, Error> {
 		if let Some(seed) = self.cached_seeds.get(&id) {
 			Ok(seed.clone())
 		} else if let Some(node) = self.node_by_id(id) {
@@ -537,13 +537,13 @@ impl FileSystem {
 mod tests {
 	use super::*;
 
-	fn is_dir(fs: &FileSystem, id: u128, name: &str, parent: u128) -> bool {
+	fn is_dir(fs: &FileSystem, id: u64, name: &str, parent: u64) -> bool {
 		fs.node_by_id(id).map_or(false, |n| {
 			matches!(n.entry, Entry::Dir { .. }) && n.name == name && n.parent_id == parent
 		})
 	}
 
-	fn is_file(fs: &FileSystem, id: u128, name: &str, parent: u128) -> bool {
+	fn is_file(fs: &FileSystem, id: u64, name: &str, parent: u64) -> bool {
 		fs.node_by_id(id).map_or(false, |n| {
 			matches!(n.entry, Entry::File { .. }) && n.name == name && n.parent_id == parent
 		})
@@ -601,7 +601,7 @@ mod tests {
 		assert_eq!(fs, restored);
 	}
 
-	fn eval_share(fs: &mut FileSystem, id: u128, parent_id: u128) -> bool {
+	fn eval_share(fs: &mut FileSystem, id: u64, parent_id: u64) -> bool {
 		let share = fs.share_node(id).unwrap();
 
 		matches!(fs.node_by_id(parent_id).unwrap().entry, Entry::Dir { ref seed, .. } if seed_from_parent_for_node(seed, id) == share)

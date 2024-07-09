@@ -30,7 +30,7 @@ impl From<Error> for JsValue {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct LockedUser {
-	id: u128,
+	id: u64,
 	pub(crate) encrypted_priv: Vec<u8>,
 	#[serde(rename = "pub")]
 	pub(crate) _pub: identity::Public,

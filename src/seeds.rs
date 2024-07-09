@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{encrypted::Encrypted, identity};
 
 pub(crate) const SEED_SIZE: usize = 32;
-pub(crate) const ROOT_ID: u128 = 0;
+pub(crate) const ROOT_ID: u64 = 0;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Seed {
@@ -47,7 +47,7 @@ pub struct Invite {
 	// sig
 }
 
-pub type Seeds = HashMap<u128, Seed>;
+pub type Seeds = HashMap<u64, Seed>;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Bundle {
@@ -73,11 +73,11 @@ impl Bundle {
 		}
 	}
 
-	pub fn set_fs(&mut self, id: u128, seed: Seed) {
+	pub fn set_fs(&mut self, id: u64, seed: Seed) {
 		self.fs.insert(id, seed);
 	}
 
-	pub fn set_db(&mut self, id: u128, seed: Seed) {
+	pub fn set_db(&mut self, id: u64, seed: Seed) {
 		self.db.insert(id, seed);
 	}
 

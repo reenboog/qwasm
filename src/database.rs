@@ -22,13 +22,13 @@ pub struct Database {
 }
 
 pub trait SeedById {
-	fn seed_by_id<F>(&self, id: u128, derive_fn: F) -> Option<Seed>
+	fn seed_by_id<F>(&self, id: u64, derive_fn: F) -> Option<Seed>
 	where
 		F: Fn(&Seed) -> Seed;
 }
 
 impl SeedById for Vec<Seeds> {
-	fn seed_by_id<F>(&self, id: u128, derive: F) -> Option<Seed>
+	fn seed_by_id<F>(&self, id: u64, derive: F) -> Option<Seed>
 	where
 		F: Fn(&Seed) -> Seed,
 	{
@@ -80,11 +80,11 @@ pub fn derive_column_seed_from_root(root: &Seed, table_name: &str, column_name: 
 	derive_column_seed_from_table(&table, column_name)
 }
 
-pub fn id_for_column(table: &str, column: &str) -> u128 {
+pub fn id_for_column(table: &str, column: &str) -> u64 {
 	id::from_bytes(&[table.as_bytes(), b"-", column.as_bytes()].concat())
 }
 
-pub fn id_for_table(table: &str) -> u128 {
+pub fn id_for_table(table: &str) -> u64 {
 	id::from_bytes(table.as_bytes())
 }
 

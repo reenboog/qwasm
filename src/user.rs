@@ -80,7 +80,7 @@ pub struct User {
 
 impl User {
 	// TODO: fs and db is required here; hence return Result?
-	fn seeds_for_ids(&self, _fs_ids: &[u128], _db_ids: &[u128]) -> Bundle {
+	fn seeds_for_ids(&self, _fs_ids: &[u64], _db_ids: &[u64]) -> Bundle {
 		match self.role {
 			Role::God => {
 				// fs:
@@ -154,8 +154,8 @@ impl User {
 	fn share_seeds_with_params(
 		&self,
 		pin: &str,
-		fs_ids: &[u128],
-		db_ids: &[u128],
+		fs_ids: &[u64],
+		db_ids: &[u64],
 		email: &str,
 	) -> Vec<u8> {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);
@@ -243,7 +243,7 @@ impl User {
 	}
 
 	//
-	fn decrypt_node(&self, id: u128) -> Result<Vec<u8>, Error> {
+	fn decrypt_node(&self, id: u64) -> Result<Vec<u8>, Error> {
 		todo!()
 	}
 }
