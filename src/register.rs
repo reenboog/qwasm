@@ -4,7 +4,7 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use crate::{
 	identity::{self},
 	password_lock,
-	seeds::{Bundle, Invite, LockedShare, Share},
+	seeds::{Bundle, Export, Import, Invite, LockedShare},
 	user::{self, User},
 };
 
@@ -37,8 +37,7 @@ pub struct LockedUser {
 	#[serde(rename = "type")]
 	pub(crate) role: String,
 	pub(crate) shares: Vec<LockedShare>,
-	// TODO: request locked nodes here optionally as well?
-	// an idea to rely on LockedEntries for both, db and fs, seems useful
+	// an idea to rely on LockedEntries for both, db and fs, seems viable
 }
 
 #[wasm_bindgen]
@@ -70,10 +69,10 @@ pub fn register_as_god(pass: &str) -> Registered {
 pub fn register_as_admin(pass: &str, invite: &[u8], pin: &str) -> Result<Registered, Error> {
 	// invite: sender, email, payload: Lock
 	let invite: Invite = serde_json::from_slice(invite).map_err(|_| Error::BadJson)?;
-	// TODO: verify signature?
+	// FIXME: verify sig here?
 	let bundle = password_lock::unlock(invite.payload, pin).map_err(|_| Error::WrongPass)?;
 	let bundle: Bundle = serde_json::from_slice(&bundle).map_err(|_| Error::BadJson)?;
-	let share = Share {
+	let import = Import {
 		sender: invite.sender,
 		bundle,
 	};
@@ -81,7 +80,7 @@ pub fn register_as_admin(pass: &str, invite: &[u8], pin: &str) -> Result<Registe
 	Ok(register_with_params(
 		pass,
 		identity::Identity::generate(),
-		Some(share),
+		Some(import),
 		user::Role::Admin,
 	))
 }
@@ -89,22 +88,26 @@ pub fn register_as_admin(pass: &str, invite: &[u8], pin: &str) -> Result<Registe
 fn register_with_params(
 	pass: &str,
 	identity: identity::Identity,
-	share: Option<Share>,
+	import: Option<Import>,
 	role: user::Role,
 ) -> Registered {
 	let locked_priv = password_lock::lock(identity.private(), pass).unwrap();
 	let _pub = identity.public();
-	let shares = share.map_or(Vec::new(), |s| vec![s]);
+	let imports = import.map_or(Vec::new(), |s| vec![s]);
 	let locked_user = LockedUser {
 		id: _pub.id(),
 		encrypted_priv: serde_json::to_vec(&locked_priv).unwrap(),
 		_pub: _pub.clone(),
 		role: role.to_string(),
-		shares: shares
+		shares: imports
 			.iter()
 			.map(|s| LockedShare {
 				sender: s.sender.clone(),
-				receiver: _pub.clone(),
+				export: Export {
+					receiver: _pub.id(),
+					fs: s.bundle.fs.keys().cloned().collect(),
+					db: s.bundle.db.keys().cloned().collect(),
+				},
 				payload: _pub.encrypt(s.bundle.clone()),
 			})
 			.collect(),
@@ -114,7 +117,8 @@ fn register_with_params(
 		locked_user: serde_json::to_vec(&locked_user).unwrap(),
 		user: User {
 			identity,
-			shares: shares,
+			imports,
+			exports: Vec::new(),
 			role,
 		},
 	}

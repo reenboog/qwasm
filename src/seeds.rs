@@ -24,18 +24,28 @@ impl Seed {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 // sender can share as many bundles as he wants
-pub struct Share {
+pub struct Import {
+	// no sig is required here; validate LockedShare instead
 	pub(crate) sender: identity::Public,
 	pub(crate) bundle: Bundle,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct Export {
+	// no sig is required here; validate LockedShare instead
+	pub(crate) receiver: u64,
+	// these are ids of the exported seeds
+	pub(crate) fs: Vec<u64>,
+	pub(crate) db: Vec<u64>,
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
+// when unlocking, the backend is to return all LockedShare where id == sender.id() || export.receiver
 pub struct LockedShare {
 	pub(crate) sender: identity::Public,
-	pub(crate) receiver: identity::Public,
+	pub(crate) export: Export,
 	pub(crate) payload: identity::Encrypted,
-	// pub(crate) sig: Signature,
-	// keep original pin-locked copy, if any?
+	// sig = sign({ sender, receiver, bundle_ids or bundles? })
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]

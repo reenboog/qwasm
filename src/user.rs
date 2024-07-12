@@ -9,7 +9,7 @@ use crate::{
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, Bundle, Invite, Seed, Share, ROOT_ID},
+	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID},
 };
 
 pub enum Error {
@@ -74,7 +74,10 @@ pub struct User {
 	// FIXME: do I need to keep the shares or rebuild fs tree and db tree on unlock?
 	// when unlocking, I may rebuikd the whole hierarchy for both db and fs by requesting a schema and a file tree
 	// TODO: probably keep the shares all the time in case access is revoked or regranted
-	pub(crate) shares: Vec<Share>,
+	// things others share with me
+	pub(crate) imports: Vec<Import>,
+	// things I share with others
+	pub(crate) exports: Vec<Export>,
 	pub(crate) role: Role,
 }
 
@@ -119,7 +122,7 @@ impl User {
 			}
 			Role::Admin => {
 				// FIXME: for now, there will only be one share
-				self.shares.get(0).unwrap().bundle.clone()
+				self.imports.get(0).unwrap().bundle.clone()
 			}
 		}
 	}
@@ -164,6 +167,7 @@ impl User {
 			sender: self.identity.public().clone(),
 			email: email.to_string(),
 			payload,
+			// sig,
 		};
 
 		let serialized = serde_json::to_vec(&invite).unwrap();
@@ -205,7 +209,7 @@ impl User {
 		salt: Salt,
 	) -> Result<aes_gcm::Aes, Error> {
 		let bundles = self
-			.shares
+			.imports
 			.iter()
 			.map(|s| s.bundle.db.clone())
 			.collect::<Vec<_>>();
@@ -241,15 +245,14 @@ impl User {
 
 		Ok(aes_gcm::Aes::from(&key_iv))
 	}
-
-	//
-	fn decrypt_node(&self, id: u64) -> Result<Vec<u8>, Error> {
-		todo!()
-	}
 }
 
 #[wasm_bindgen]
 impl User {
+	// exort seeds as a LockedShare to a public key
+	// pub fn export_seeds_to_identity(&self, fs: &[u64], db: &[u64], identity: Identity::Public) -> Vec<u8>
+	// { .. }
+
 	// export all root seeds; returns json-serialized Invite
 	// used when creating new admins
 	pub fn export_seeds_encrypted(&self, pin: &str, email: &str) -> Vec<u8> {
@@ -283,19 +286,17 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 
 	let _priv: identity::Private =
 		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;
+	// TODO: verify sigs for imports and exports
 
-	Ok(User {
-		identity: Identity {
-			_priv: _priv.clone(),
-			_pub: locked._pub,
-		},
-		shares: locked
-			.shares
-			.iter()
-			.filter_map(|s| {
+	// filter locked shares for export and import
+	let imports = locked
+		.shares
+		.iter()
+		.filter_map(|s| {
+			if s.export.receiver == locked._pub.id() {
 				if let Ok(ref bytes) = _priv.decrypt(&s.payload) {
 					if let Ok(bundle) = serde_json::from_slice::<Bundle>(bytes) {
-						Some(Share {
+						Some(Import {
 							sender: s.sender.clone(),
 							bundle,
 						})
@@ -305,8 +306,30 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 				} else {
 					None
 				}
-			})
-			.collect(),
+			} else {
+				None
+			}
+		})
+		.collect::<Vec<_>>();
+	let exports = locked
+		.shares
+		.iter()
+		.filter_map(|s| {
+			if s.sender.id() == locked._pub.id() {
+				Some(s.export.clone())
+			} else {
+				None
+			}
+		})
+		.collect::<Vec<_>>();
+
+	Ok(User {
+		identity: Identity {
+			_priv: _priv.clone(),
+			_pub: locked._pub,
+		},
+		imports,
+		exports,
 		role: locked
 			.role
 			.as_str()

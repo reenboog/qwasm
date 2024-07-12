@@ -3,6 +3,15 @@
 // TODO: use web_sys for storage and network?
 // FIXME: when dealing with bundles, don't forget about God who has none
 
+return `205`/`207`/`303` when access level/hierarchy is outdated? Or force refetch?
+
+a 1000 encrypted announcements + a 1000 of all encrypted db fields would give ~ 2Mb
+a 1000 encrypted nodes would make around 500 Kb
+
+start from http error codes, then introduce real time events
+
+GET /subtrees/[ids] -> OK [LockedNode] | NoAccess | NotFound
+
 revoke access by encrypting new seeds to node's parent and putting it inside it?
 
 god_signup
