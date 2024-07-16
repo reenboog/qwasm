@@ -2,6 +2,12 @@
 // TODO: remove unused Serialized/Deserialized
 // TODO: use web_sys for storage and network?
 // FIXME: when dealing with bundles, don't forget about God who has none
+// TODO: the backend is to return and expect a hash to see, if there are any nodes to fetch
+// TODO: when returning nodes, the backend is to mark folders whose children are not in the list as dirty
+
+// INFO: the backend would need to check, if god already exists, for sure when an admin signs up
+
+// FIXME: if revoking through re-encryption (asym keys to be introduced then), whole subtree would be required + locking on the backend
 
 return `205`/`207`/`303` when access level/hierarchy is outdated? Or force refetch?
 

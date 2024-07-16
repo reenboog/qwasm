@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-use crate::{encrypted::Encrypted, identity};
+use crate::{encrypted::Encrypted, identity, vault::LockedNode};
 
 pub(crate) const SEED_SIZE: usize = 32;
 pub(crate) const ROOT_ID: u64 = 0;
@@ -43,18 +43,36 @@ pub struct Export {
 // when unlocking, the backend is to return all LockedShare where id == sender.id() || export.receiver
 pub struct LockedShare {
 	pub(crate) sender: identity::Public,
+	// ids of the share (convenient to return roots to unlock)
 	pub(crate) export: Export,
+	// encrypted content of the sahre
 	pub(crate) payload: identity::Encrypted,
 	// sig = sign({ sender, receiver, bundle_ids or bundles? })
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Invite {
+	// TODO: is it safe to have it unencrypted?
+	pub(crate) user_id: u64,
 	// pin needs to be shared through a trusted channel, so no need to sign
 	pub(crate) sender: identity::Public,
 	pub(crate) email: String,
 	pub(crate) payload: Encrypted,
+	// TODO: is it safe to have them unencrypted?
+	pub(crate) export: Export,
 	// sig
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Welcome {
+	pub(crate) user_id: u64,
+	pub(crate) sender: identity::Public,
+	// email?
+	pub(crate) imports: Encrypted,
+	// sig
+	// TODO: get_nodes(invite.export.fs.ids)
+	pub(crate) nodes: Vec<LockedNode>,
+	// db related stuff? – rather not, since it's passed via bundles
 }
 
 pub type Seeds = HashMap<u64, Seed>;

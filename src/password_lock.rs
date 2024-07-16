@@ -56,16 +56,17 @@ pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Encrypted, Error> {
 	Ok(Encrypted { ct, salt })
 }
 
-pub fn lock<T>(pt: T, pass: &str) -> Result<Encrypted, Error>
+pub fn lock<T>(pt: &T, pass: &str) -> Result<Encrypted, Error>
 where
 	T: Serialize,
 {
-	let serialized = serde_json::to_vec(&pt).unwrap();
+	let serialized = serde_json::to_vec(pt).unwrap();
 
 	lock_serialized(&serialized, pass)
 }
 
 fn lock_with_params(pt: &[u8], pass: &str, salt: &Salt, config: &Config) -> Result<Vec<u8>, Error> {
+	// FIXME: introduce master keys: enc(pt, mk) -> enc(mk, kdf(pass))
 	let aes = aes_from_params(pass, salt, config)?;
 
 	Ok(aes.encrypt(pt))

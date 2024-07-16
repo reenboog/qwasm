@@ -40,6 +40,8 @@ impl Private {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Public {
+	// created by by the inviting party (unless god)
+	pub(crate) id: u64,
 	// can be used to encrypt messages to or verify signatures against
 	pub(crate) x448: PublicKeyX448,
 	pub(crate) ed448: PublicKeyEd448,
@@ -63,7 +65,8 @@ fn aes_from_dh_keys(sk: &PrivateKeyX448, pk: &PublicKeyX448) -> aes_gcm::Aes {
 
 impl Public {
 	pub fn id(&self) -> u64 {
-		id::from_bytes(&[self.x448.as_bytes(), self.ed448.as_bytes().as_slice()].concat())
+		// id::from_bytes(&[self.x448.as_bytes(), self.ed448.as_bytes().as_slice()].concat())
+		self.id
 	}
 
 	pub fn encrypt_serialized(&self, pt: &[u8]) -> Encrypted {
@@ -101,7 +104,7 @@ impl Identity {
 		self._pub.id()
 	}
 
-	pub fn generate() -> Self {
+	pub fn generate(id: u64) -> Self {
 		let KeyPairX448 {
 			private: x448_priv,
 			public: x448_pub,
@@ -117,6 +120,7 @@ impl Identity {
 				ed448: ed448_priv,
 			},
 			_pub: Public {
+				id: id,
 				x448: x448_pub,
 				ed448: ed448_pub,
 			},
@@ -138,7 +142,7 @@ mod tests {
 
 	#[test]
 	fn test_encrypt_decrypt() {
-		let ident = Identity::generate();
+		let ident = Identity::generate(0);
 		let msg = b"hi there";
 		let encrypted = ident.public().encrypt_serialized(msg);
 		let decrypted = ident.private().decrypt(&encrypted).unwrap();
@@ -148,7 +152,7 @@ mod tests {
 
 	#[test]
 	fn test_sign_verify() {
-		let ident = Identity::generate();
+		let ident = Identity::generate(0);
 		let msg = b"hi there";
 		let sig = ident.private().sign(msg);
 
@@ -157,7 +161,7 @@ mod tests {
 
 	#[test]
 	fn test_serialize_deserialized() {
-		let ident = Identity::generate();
+		let ident = Identity::generate(0);
 		let serialized = serde_json::to_vec(&ident).unwrap();
 		let deserialized = serde_json::from_slice(&serialized).unwrap();
 

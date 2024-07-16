@@ -12,5 +12,5 @@ pub enum Event {
 	MoveNodes(Vec<MoveNode>),
 	RemoveNodes(Vec<u64>),
 	GrantAccess(LockedShare), // TODO: same for DB
-	RevokeAccess(Vec<u64>), // seed ids = node ids
+	RevokeAccess(Vec<u64>),   // seed ids = node ids
 }

@@ -1,19 +1,17 @@
-use serde::{Deserialize, Serialize};
 use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 
 use crate::{
 	aes_gcm,
 	database::{self, SeedById},
-	encrypted, hkdf,
+	encrypted, hkdf, id,
 	identity::{self, Identity},
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID},
+	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID}, vault::FileSystem,
 };
 
 pub enum Error {
-	UnknownRole,
 	BadJson,
 	WrongPass,
 	BadSalt,
@@ -27,7 +25,6 @@ impl From<Error> for JsValue {
 		use Error::*;
 
 		JsValue::from_str(match val {
-			UnknownRole => "UnknownRole",
 			BadJson => "BadJson",
 			WrongPass => "WrongPass",
 			BadSalt => "BadSalt",
@@ -38,97 +35,70 @@ impl From<Error> for JsValue {
 	}
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum Role {
-	Admin,
-	God,
-}
-
-impl ToString for Role {
-	fn to_string(&self) -> String {
-		match self {
-			Role::Admin => "admin",
-			Role::God => "god",
-		}
-		.to_string()
-	}
-}
-
-impl TryFrom<&str> for Role {
-	type Error = Error;
-
-	fn try_from(s: &str) -> Result<Self, Self::Error> {
-		match s {
-			"god" => Ok(Self::God),
-			"admin" => Ok(Self::Admin),
-			_ => Err(Error::UnknownRole),
-		}
-	}
-}
+pub(crate) const GOD_ID: u64 = 0;
 
 #[wasm_bindgen]
 #[derive(PartialEq, Debug, Clone)]
 pub struct User {
 	pub(crate) identity: Identity,
-	// or rather a list of Bundles actually?
-	// FIXME: do I need to keep the shares or rebuild fs tree and db tree on unlock?
-	// when unlocking, I may rebuikd the whole hierarchy for both db and fs by requesting a schema and a file tree
-	// TODO: probably keep the shares all the time in case access is revoked or regranted
-	// things others share with me
+	// things others share with me (shares); probably not requied?..
 	pub(crate) imports: Vec<Import>,
 	// things I share with others
 	pub(crate) exports: Vec<Export>,
-	pub(crate) role: Role,
+	pub(crate) fs: FileSystem,
+	// db
 }
 
 impl User {
-	// TODO: fs and db is required here; hence return Result?
+	fn is_god(&self) -> bool {
+		self.identity.id() == GOD_ID
+	}
+
+	// FIXME: fs and db is required here; hence return Result?
 	fn seeds_for_ids(&self, _fs_ids: &[u64], _db_ids: &[u64]) -> Bundle {
-		match self.role {
-			Role::God => {
-				// fs:
-				// 	docs/
-				//		*invoices/
-				//			*june.pdf
-				//			*july.pdf
-				//			*...
-				//		contracts/
-				//			*upgrade.pdf
-				//			contractors.pdf
-				//			*infra.pdf
-				//	*recordings/
-				//		*...
+		if self.is_god() {
+			// fs:
+			// 	docs/
+			//		*invoices/
+			//			*june.pdf
+			//			*july.pdf
+			//			*...
+			//		contracts/
+			//			*upgrade.pdf
+			//			contractors.pdf
+			//			*infra.pdf
+			//	*recordings/
+			//		*...
 
-				// db:
-				// for db –	tables and (optionally) their columns, eg
-				// 	-users { address, email }
-				// 	-messages { * }
-				// db_ids.for_each id
-				//	1 seeds(id) else
-				//	2 tables.derive(table, column) else
-				//	3 root.derive(table, column) else NoAccess
+			// db:
+			// for db –	tables and (optionally) their columns, eg
+			// 	-users { address, email }
+			// 	-messages { * }
+			// db_ids.for_each id
+			//	1 seeds(id) else
+			//	2 tables.derive(table, column) else
+			//	3 root.derive(table, column) else NoAccess
 
-				// FIXME: for now, everybody would have access to the very root seeds
-				//	I'll always have a complete node tree
-				// fs_ids.for_each id
-				// 	1 node.get(id) else NoAccess
-				// so, export from a tree instead!
-				let mut bundle = Bundle::new();
+			// FIXME: for now, everybody would have access to the very root seeds
+			//	I'll always have a complete node tree
+			// fs_ids.for_each id
+			// 	1 node.get(id) else NoAccess
+			// so, export from a tree instead!
+			let mut bundle = Bundle::new();
+			let identity = self.identity.private();
 
-				bundle.set_db(ROOT_ID, self.db_seed());
-				bundle.set_fs(ROOT_ID, self.fs_seed());
+			bundle.set_db(ROOT_ID, Self::db_seed(identity));
+			bundle.set_fs(ROOT_ID, Self::fs_seed(identity));
 
-				bundle
-			}
-			Role::Admin => {
-				// FIXME: for now, there will only be one share
-				self.imports.get(0).unwrap().bundle.clone()
-			}
+			bundle
+		} else {
+			// FIXME: for now, there will only be one share
+			// check imports or calculate from the file tree/db directly
+			self.imports.get(0).unwrap().bundle.clone()
 		}
 	}
 
-	fn derive_seed_with_label(&self, label: &[u8]) -> Seed {
-		let identity = self.identity.private();
+	fn derive_seed_with_label(identity: &identity::Private, label: &[u8]) -> Seed {
 		// hash identity's private keys to "root"
 		let root = hkdf::Hkdf::from_ikm(
 			&[
@@ -144,17 +114,18 @@ impl User {
 		Seed { bytes }
 	}
 
-	fn db_seed(&self) -> Seed {
-		self.derive_seed_with_label(b"db")
+	pub fn db_seed(identity: &identity::Private) -> Seed {
+		Self::derive_seed_with_label(identity, b"db")
 	}
 
-	fn fs_seed(&self) -> Seed {
-		self.derive_seed_with_label(b"fs")
+	pub fn fs_seed(identity: &identity::Private) -> Seed {
+		Self::derive_seed_with_label(identity, b"fs")
 	}
 
 	// pin is just a password used to encrypt the seeds, if any
 	// at this point, all we know is an email address and the seeds
-	fn share_seeds_with_params(
+	// FIXME: return Result, if seeds not found (in case of an incomplete tree)
+	fn share_seeds_to_email(
 		&self,
 		pin: &str,
 		fs_ids: &[u64],
@@ -162,11 +133,19 @@ impl User {
 		email: &str,
 	) -> Vec<u8> {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);
-		let payload = password_lock::lock(bundle, pin).unwrap();
+		let payload = password_lock::lock(&bundle, pin).unwrap();
+		// TODO: sign({ id, sender, bundle or payload? })
+		let user_id = id::generate();
 		let invite = Invite {
+			user_id,
 			sender: self.identity.public().clone(),
 			email: email.to_string(),
 			payload,
+			export: Export {
+				receiver: user_id,
+				fs: bundle.fs.keys().cloned().collect(),
+				db: bundle.db.keys().cloned().collect(),
+			},
 			// sig,
 		};
 
@@ -228,10 +207,10 @@ impl User {
 			database::derive_entry_seed_from_root(s, table, column, &salt)
 		}) {
 			Ok(seed_from_root)
-		} else if self.role == Role::God {
-			// god doesn't keep bundles, so let's sue his seed directly
+		} else if self.is_god() {
+			// god doesn't keep bundles, so let's use his seed directly
 			Ok(database::derive_entry_seed_from_root(
-				&self.db_seed(),
+				&Self::db_seed(self.identity.private()),
 				table,
 				column,
 				&salt,
@@ -251,12 +230,17 @@ impl User {
 impl User {
 	// exort seeds as a LockedShare to a public key
 	// pub fn export_seeds_to_identity(&self, fs: &[u64], db: &[u64], identity: Identity::Public) -> Vec<u8>
+	// the backend should check, if it's a redundant share, eg when the recipient already has root and no subroot is required
 	// { .. }
+
+	// pub fn export_seeds_to_identity(&self, identity: &identity::Public) -> Vec<u8> {
+	// 	todo!()
+	// }
 
 	// export all root seeds; returns json-serialized Invite
 	// used when creating new admins
-	pub fn export_seeds_encrypted(&self, pin: &str, email: &str) -> Vec<u8> {
-		self.share_seeds_with_params(pin, &[], &[], email)
+	pub fn export_root_seeds_to_email(&self, pin: &str, email: &str) -> Vec<u8> {
+		self.share_seeds_to_email(pin, &[], &[], email)
 	}
 
 	// FIXME: sign as well
@@ -275,7 +259,6 @@ impl User {
 }
 
 #[wasm_bindgen]
-// I'm already authenticated, so should it be fine to request all locked nodes as well?
 pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
 	let decrypted_priv = password_lock::unlock(
@@ -288,12 +271,16 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;
 	// TODO: verify sigs for imports and exports
 
+	// for god, there should be one LockedNode (or more, if root's children) and no imports, so
+	// use use.fs_seed instead for admins, there could be several LockedNodes (subroots +
+	// children depending on depth) and LockedShares needed to decrypt the nodes
+
 	// filter locked shares for export and import
 	let imports = locked
 		.shares
 		.iter()
 		.filter_map(|s| {
-			if s.export.receiver == locked._pub.id() {
+			if s.export.receiver == locked.id() {
 				if let Ok(ref bytes) = _priv.decrypt(&s.payload) {
 					if let Ok(bundle) = serde_json::from_slice::<Bundle>(bytes) {
 						Some(Import {
@@ -315,13 +302,20 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 		.shares
 		.iter()
 		.filter_map(|s| {
-			if s.sender.id() == locked._pub.id() {
+			if s.sender.id() == locked.id() {
 				Some(s.export.clone())
 			} else {
 				None
 			}
 		})
-		.collect::<Vec<_>>();
+		.collect();
+
+	let bundles = if locked.is_god() {
+		[(ROOT_ID, User::fs_seed(&_priv))].into_iter().collect()
+	} else {
+		imports.iter().flat_map(|im| im.bundle.fs.clone()).collect()
+	};
+	let fs = FileSystem::from_locked_nodes(&locked.roots, &bundles);
 
 	Ok(User {
 		identity: Identity {
@@ -330,18 +324,15 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 		},
 		imports,
 		exports,
-		role: locked
-			.role
-			.as_str()
-			.try_into()
-			.map_err(|_| Error::UnknownRole)?,
+		fs,
 	})
 }
 
 #[cfg(test)]
 mod tests {
 	use crate::{
-		register::{register_as_admin, register_as_god, Registered},
+		register::{register_as_admin, register_as_god, LockedUser, Registered},
+		seeds::{Invite, Welcome},
 		user::unlock_with_pass,
 	};
 
@@ -349,19 +340,33 @@ mod tests {
 	fn test_encrypt_announcement() {
 		let god_pass = "god_pass";
 		let Registered {
-			locked_user: _,
+			locked_user,
 			user: god,
 		} = register_as_god(&god_pass);
+		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.export_seeds_encrypted(pin, "alice.mail.com");
+		let invite = god.export_root_seeds_to_email(pin, "alice.mail.com");
+		let invite: Invite = serde_json::from_slice(&invite).unwrap();
+		let welcome = Welcome {
+			user_id: invite.user_id,
+			sender: invite.sender,
+			imports: invite.payload,
+			nodes: locked_user.roots.clone(),
+		};
+		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let admin_pass = "admin_pass";
 		let Registered {
 			locked_user: admin_json,
 			user: admin,
-		} = register_as_admin(admin_pass, &invite, pin).unwrap();
+		} = register_as_admin(admin_pass, &welcome, pin).unwrap();
 
-		let unlocked_admin = unlock_with_pass(admin_pass, &admin_json).unwrap();
+		// pretend the backend returns all locked nodes for this user
+		let mut decoded: LockedUser = serde_json::from_slice(&admin_json).unwrap();
+		decoded.roots = locked_user.roots;
+		let reencoded = serde_json::to_vec(&decoded).unwrap();
+
+		let unlocked_admin = unlock_with_pass(admin_pass, &reencoded).unwrap();
 
 		assert_eq!(admin, unlocked_admin);
 

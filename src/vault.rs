@@ -36,11 +36,11 @@ pub enum LockedEntry {
 	Dir { seed: Seed },
 }
 
-#[derive(Serialize, Deserialize)]
-struct LockedNode {
-	id: u64,
-	parent_id: u64,
-	content: Vec<u8>,
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub(crate) struct LockedNode {
+	pub(crate) id: u64,
+	pub(crate) parent_id: u64,
+	pub(crate) content: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -48,7 +48,8 @@ struct LockedContent {
 	created_at: u64,
 	name: String,
 	// FIXME: introduce creator: identity::Public,
-	// FIXME: introduce sig: ed448::Signature,
+	// FIXME: introduce owner_sig: ed448::Signature,
+	// TODO: introduce acl_sig? (signed by the parent folder)
 	entry: LockedEntry,
 }
 
@@ -125,10 +126,10 @@ impl Node {
 	fn encrypt_with_parent_seed(node: &Node, parent: &Seed) -> Vec<u8> {
 		let seed = seed_from_parent_for_node(parent, node.id);
 
-		Self::encrypt(node, &seed)
+		Self::encrypt_to_serialized(node, &seed)
 	}
 
-	fn encrypt(node: &Node, node_seed: &Seed) -> Vec<u8> {
+	fn encrypt(node: &Node, node_seed: &Seed) -> LockedNode {
 		let entry = match &node.entry {
 			Entry::File { info } => LockedEntry::File { info: info.clone() },
 			Entry::Dir { seed, .. } => LockedEntry::Dir { seed: seed.clone() },
@@ -144,18 +145,21 @@ impl Node {
 		let ct = aes.encrypt(&locked_content);
 		let encrypted = Encrypted { ct, salt };
 		let encrypted = serde_json::to_vec(&encrypted).unwrap();
-		let locked_node = LockedNode {
+		
+		LockedNode {
 			id: node.id,
 			parent_id: node.parent_id,
 			content: encrypted,
-		};
+		}
+	}
 
-		serde_json::to_vec(&locked_node).unwrap()
+	fn encrypt_to_serialized(node: &Node, node_seed: &Seed) -> Vec<u8> {
+		serde_json::to_vec(&Self::encrypt(node, node_seed)).unwrap()
 	}
 }
 
-#[derive(PartialEq, Debug)]
-pub struct FileSystem {
+#[derive(PartialEq, Debug, Clone)]
+pub(crate) struct FileSystem {
 	// a user can have multiple top-level shares belonging to different
 	// subtrees, therefore more than one root is possible
 	roots: Vec<Node>,
@@ -163,7 +167,7 @@ pub struct FileSystem {
 	cached_seeds: Seeds,
 }
 
-const NO_PARENT_ID: u64 = u64::MAX;
+pub(crate) const NO_PARENT_ID: u64 = u64::MAX;
 
 #[cfg(target_arch = "wasm32")]
 fn now() -> u64 {
@@ -181,7 +185,7 @@ fn now() -> u64 {
 
 impl FileSystem {
 	// returns FileSystem { root_node } & its json
-	pub fn new(fs_seed: &Seed) -> (Self, Vec<u8>) {
+	pub fn new(fs_seed: &Seed) -> (Self, LockedNode) {
 		let id = ROOT_ID;
 		let parent_id = NO_PARENT_ID;
 		let created_at = now();
@@ -197,7 +201,7 @@ impl FileSystem {
 				children: Vec::new(),
 			},
 		};
-		let json = Node::encrypt(&node, fs_seed);
+		let locked_root = Node::encrypt(&node, fs_seed);
 		let cached_seeds = vec![(id, fs_seed.clone())].into_iter().collect();
 
 		(
@@ -205,13 +209,21 @@ impl FileSystem {
 				roots: vec![node],
 				cached_seeds,
 			},
-			json,
+			locked_root,
 		)
 	}
 
-	// always fetch all nodes, but build a tree based on shares
 	// TODO: for god, remember to pass one share { root_id: seed } manually
-	pub fn from_locked_nodes(locked_nodes: &[&Vec<u8>], bundles: &Seeds) -> FileSystem {
+	pub fn from_locked_nodes_serialized(locked_nodes: &[&Vec<u8>], bundles: &Seeds) -> FileSystem {
+		let locked_nodes: Vec<LockedNode> = locked_nodes
+			.iter()
+			.filter_map(|bytes| serde_json::from_slice::<LockedNode>(bytes).ok())
+			.collect();
+
+		Self::from_locked_nodes(&locked_nodes, bundles)
+	}
+
+	pub fn from_locked_nodes(locked_nodes: &[LockedNode], bundles: &Seeds) -> FileSystem {
 		let (mut nodes, branches, roots) = Self::parse_locked(locked_nodes, bundles);
 
 		FileSystem {
@@ -222,20 +234,16 @@ impl FileSystem {
 
 	// returns (nodes, branches, roots)
 	fn parse_locked(
-		locked_nodes: &[&Vec<u8>],
+		locked_nodes: &[LockedNode],
 		bundles: &Seeds,
 	) -> (HashMap<u64, Node>, HashMap<u64, Vec<u64>>, Vec<u64>) {
-		let locked_nodes: Vec<LockedNode> = locked_nodes
-			.iter()
-			.filter_map(|bytes| serde_json::from_slice::<LockedNode>(bytes).ok())
-			.collect();
 
 		let mut node_map: HashMap<u64, Node> = HashMap::new();
 		let mut locked_node_map: HashMap<u64, &LockedNode> = HashMap::new();
 		let mut branches: HashMap<u64, Vec<u64>> = HashMap::new();
 		let mut roots = Vec::new();
 
-		for locked_node in &locked_nodes {
+		for locked_node in locked_nodes {
 			if locked_nodes.iter().any(|ln| ln.id == locked_node.parent_id) {
 				branches
 					.entry(locked_node.parent_id)
@@ -578,7 +586,8 @@ mod tests {
 	#[test]
 	fn test_from_locked_nodes_for_root() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -596,7 +605,7 @@ mod tests {
 		];
 
 		let bundles = vec![(ROOT_ID, seed.clone())].into_iter().collect();
-		let restored = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let restored = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert_eq!(fs, restored);
 	}
@@ -635,7 +644,8 @@ mod tests {
 	#[test]
 	fn test_share_a_file() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -654,7 +664,7 @@ mod tests {
 		];
 		let bundles = vec![(_1_1_1_atxt.0, share)].into_iter().collect();
 
-		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
 		assert_eq!(
@@ -666,7 +676,8 @@ mod tests {
 	#[test]
 	fn test_share_several_files_detached_as_roots() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -698,7 +709,7 @@ mod tests {
 		.into_iter()
 		.collect();
 
-		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
 		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
@@ -714,7 +725,8 @@ mod tests {
 	#[test]
 	fn test_share_several_dirs_detached_as_roots() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -741,7 +753,7 @@ mod tests {
 			.into_iter()
 			.collect();
 
-		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_dir(&fs_partial, _1_1_1.0, "1_1_1", _1_1.0));
 		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
@@ -755,7 +767,8 @@ mod tests {
 	#[test]
 	fn test_share_mixed() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -789,7 +802,7 @@ mod tests {
 		.into_iter()
 		.collect();
 
-		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
@@ -805,7 +818,8 @@ mod tests {
 	#[test]
 	fn test_errors() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -842,7 +856,7 @@ mod tests {
 		.into_iter()
 		.collect();
 
-		let mut fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let mut fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
@@ -865,7 +879,8 @@ mod tests {
 	#[test]
 	fn test_share_parents_and_children() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -901,7 +916,7 @@ mod tests {
 		.into_iter()
 		.collect();
 
-		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_dir(&fs_partial, _1.0, "1", ROOT_ID));
 		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
@@ -916,7 +931,8 @@ mod tests {
 	#[test]
 	fn test_share_distant_relatives() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
@@ -950,7 +966,7 @@ mod tests {
 		.into_iter()
 		.collect();
 
-		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_dir(&fs_partial, ROOT_ID, "/", NO_PARENT_ID));
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
@@ -965,7 +981,8 @@ mod tests {
 	#[test]
 	fn test_share_root_and_children() {
 		let seed = Seed::generate();
-		let (mut fs, root_json) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed);
+		let root_json = serde_json::to_vec(&root).unwrap();
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _2 = fs.mkdir(ROOT_ID, "2").unwrap();
@@ -1005,7 +1022,7 @@ mod tests {
 		.into_iter()
 		.collect();
 
-		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
+		let fs_partial = FileSystem::from_locked_nodes_serialized(&locked_nodes, &bundles);
 
 		assert!(is_dir(&fs_partial, ROOT_ID, "/", NO_PARENT_ID));
 		assert!(is_dir(&fs_partial, _1.0, "1", ROOT_ID));

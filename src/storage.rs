@@ -19,10 +19,8 @@ struct Storage {
 	// shares
 	// invites
 	// users:
-	//	id
 	// 	priv
 	//  pub
-	// 	role
 }
 
 impl Storage {
