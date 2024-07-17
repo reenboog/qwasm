@@ -76,14 +76,8 @@ impl Registered {
 pub fn register_as_god(pass: &str) -> Registered {
 	let identity = identity::Identity::generate(user::GOD_ID);
 	let (fs, root) = FileSystem::new(&User::fs_seed(identity.private()));
-	
-	register_with_params(
-		pass,
-		identity,
-		None,
-		fs,
-		vec![root],
-	)
+
+	register_with_params(pass, identity, None, fs, vec![root])
 }
 
 pub fn register_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Registered, Error> {
@@ -187,7 +181,9 @@ fn register_with_params(
 #[cfg(test)]
 mod tests {
 	use crate::{
-		register::LockedUser, seeds::{Invite, Welcome}, user::{self}
+		register::LockedUser,
+		seeds::{Invite, Welcome},
+		user::{self},
 	};
 
 	use super::{register_as_admin, register_as_god, Registered};

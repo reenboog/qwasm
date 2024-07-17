@@ -41,6 +41,7 @@ pub(crate) struct LockedNode {
 	pub(crate) id: u64,
 	pub(crate) parent_id: u64,
 	pub(crate) content: Vec<u8>,
+	pub(crate) dirty: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -69,6 +70,7 @@ struct Node {
 	created_at: u64,
 	name: String,
 	entry: Entry,
+	dirty: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -145,11 +147,12 @@ impl Node {
 		let ct = aes.encrypt(&locked_content);
 		let encrypted = Encrypted { ct, salt };
 		let encrypted = serde_json::to_vec(&encrypted).unwrap();
-		
+
 		LockedNode {
 			id: node.id,
 			parent_id: node.parent_id,
 			content: encrypted,
+			dirty: false,
 		}
 	}
 
@@ -200,6 +203,7 @@ impl FileSystem {
 				seed,
 				children: Vec::new(),
 			},
+			dirty: false,
 		};
 		let locked_root = Node::encrypt(&node, fs_seed);
 		let cached_seeds = vec![(id, fs_seed.clone())].into_iter().collect();
@@ -232,17 +236,151 @@ impl FileSystem {
 		}
 	}
 
+	// a universal method for files as well?
+	// how about removeal?
+	pub fn add_or_update_subtree(
+		&mut self,
+		locked_nodes: &[LockedNode],
+		parent_id: u64,
+	) -> Result<(), Error> {
+		if let Some(parent) = self.node_by_id_mut(parent_id) {
+			if let Entry::Dir {
+				ref seed,
+				ref mut children,
+			} = parent.entry
+			{
+				let mut node_map: HashMap<u64, Node> = HashMap::new();
+				let mut locked_node_map: HashMap<u64, &LockedNode> = HashMap::new();
+				let mut branches: HashMap<u64, Vec<u64>> = HashMap::new();
+
+				// put each node to a branch, if possible
+				for locked_node in locked_nodes {
+					if locked_nodes.iter().any(|ln| ln.id == locked_node.parent_id)
+						|| locked_node.parent_id == parent_id
+					{
+						branches
+							.entry(locked_node.parent_id)
+							.or_default()
+							.push(locked_node.id);
+					}
+
+					locked_node_map.insert(locked_node.id, locked_node);
+				}
+
+				let roots = branches.get(&parent_id).unwrap_or(&Vec::new()).clone();
+
+				for node_id in &roots {
+					if let Some(locked_node) = locked_node_map.remove(&node_id) {
+						if let Ok(encrypted) =
+							serde_json::from_slice::<Encrypted>(&locked_node.content)
+						{
+							let aes = aes_from_parent_seed_for_node(
+								seed,
+								locked_node.id,
+								&encrypted.salt,
+							);
+							if let Ok(content) =
+								LockedContent::try_from_encrypted(&encrypted.ct, aes)
+							{
+								let node = Node {
+									id: locked_node.id,
+									parent_id: locked_node.parent_id,
+									created_at: content.created_at,
+									name: content.name,
+									entry: match content.entry {
+										LockedEntry::File { info } => Entry::File { info },
+										LockedEntry::Dir { seed } => Entry::Dir {
+											seed,
+											children: vec![],
+										},
+									},
+									dirty: locked_node.dirty,
+								};
+								node_map.insert(node.id, node);
+							}
+						}
+					}
+				}
+
+				let mut to_process: Vec<u64> = node_map.keys().cloned().collect();
+
+				while let Some(id) = to_process.pop() {
+					let mut new_nodes = Vec::new();
+
+					if let Some(node) = node_map.get(&id) {
+						if let Entry::Dir { seed, .. } = &node.entry {
+							if let Some(child_ids) = branches.get(&id) {
+								for child_id in child_ids {
+									if let Some(locked_node) = locked_node_map.get(&child_id) {
+										if let Ok(encrypted) = serde_json::from_slice::<Encrypted>(
+											&locked_node.content,
+										) {
+											let aes = aes_from_parent_seed_for_node(
+												seed,
+												*child_id,
+												&encrypted.salt,
+											);
+
+											if let Ok(content) = LockedContent::try_from_encrypted(
+												&encrypted.ct,
+												aes,
+											) {
+												let child_node = Node {
+													id: locked_node.id,
+													parent_id: locked_node.parent_id,
+													created_at: content.created_at,
+													name: content.name.clone(),
+													entry: match content.entry {
+														LockedEntry::File { info } => {
+															Entry::File { info }
+														}
+														LockedEntry::Dir { seed } => Entry::Dir {
+															seed,
+															children: vec![],
+														},
+													},
+													dirty: locked_node.dirty,
+												};
+
+												new_nodes.push((child_id, child_node));
+												to_process.push(*child_id);
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+
+					for (child_id, child_node) in new_nodes {
+						locked_node_map.remove(&child_id);
+						node_map.insert(*child_id, child_node);
+					}
+				}
+
+				*children = Self::build_hierarchy(&mut node_map, &branches, &roots);
+
+				Ok(())
+			} else {
+				Err(Error::BadOperation)
+			}
+		} else {
+			Err(Error::NotFound)
+		}
+	}
+
 	// returns (nodes, branches, roots)
 	fn parse_locked(
 		locked_nodes: &[LockedNode],
 		bundles: &Seeds,
 	) -> (HashMap<u64, Node>, HashMap<u64, Vec<u64>>, Vec<u64>) {
-
+		// rebuild from self.nodes? – rathe rnot
 		let mut node_map: HashMap<u64, Node> = HashMap::new();
 		let mut locked_node_map: HashMap<u64, &LockedNode> = HashMap::new();
 		let mut branches: HashMap<u64, Vec<u64>> = HashMap::new();
 		let mut roots = Vec::new();
 
+		// put each node to a branch, if possible
 		for locked_node in locked_nodes {
 			if locked_nodes.iter().any(|ln| ln.id == locked_node.parent_id) {
 				branches
@@ -254,6 +392,8 @@ impl FileSystem {
 			locked_node_map.insert(locked_node.id, locked_node);
 		}
 
+		// won't work when updating a subroot; need a parent's seed to continue
+		// redundant bundles should probably be filtered form out here
 		for (node_id, seed) in bundles {
 			if let Some(locked_node) = locked_node_map.remove(node_id) {
 				if let Ok(encrypted) = serde_json::from_slice::<Encrypted>(&locked_node.content) {
@@ -271,6 +411,7 @@ impl FileSystem {
 									children: vec![],
 								},
 							},
+							dirty: locked_node.dirty,
 						};
 						node_map.insert(node.id, node);
 					}
@@ -312,6 +453,7 @@ impl FileSystem {
 													children: vec![],
 												},
 											},
+											dirty: locked_node.dirty,
 										};
 
 										new_nodes.push((child_id, child_node));
@@ -364,7 +506,8 @@ impl FileSystem {
 
 		let mut hierarchy = Vec::new();
 
-		// FIXME: this piece is not exactly correct: it may still build [grandchild, child, parent, grandparent]
+		// FIXME: this piece is not exactly correct: it may still build [grandchild,
+		// child, parent, grandparent], if redundant bundles have been supplied
 		for &root_id in roots {
 			if let Some(mut root) = nodes.remove(&root_id) {
 				add_children_to_node(&mut root, nodes, branches);
@@ -461,6 +604,7 @@ impl FileSystem {
 						seed: Seed::generate(),
 						children: vec![],
 					},
+					dirty: false,
 				};
 				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed);
 
@@ -502,6 +646,7 @@ impl FileSystem {
 							thumbnail: thumbnail.to_vec(),
 						},
 					},
+					dirty: false,
 				};
 				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed);
 
@@ -874,6 +1019,110 @@ mod tests {
 		assert_eq!(fs_partial.share_node(_1_2.0), Ok(_1_2_share));
 		assert_eq!(fs_partial.share_node(_1_1_1_atxt.0), Ok(_1_1_1_a_share));
 		assert_eq!(fs_partial.share_node(_1_1_1_btxt.0), Ok(_1_1_1_b_share));
+	}
+
+	#[test]
+	fn test_update_node_with_empty_children() {
+		let seed = Seed::generate();
+		let (mut fs, _) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
+
+		let mut fs_copy = fs.clone();
+		assert_eq!(fs, fs_copy);
+
+		assert_eq!(fs_copy.ls_dir(_1_1_1.0).unwrap().len(), 3);
+		assert_eq!(fs_copy.add_or_update_subtree(&[], _1_1_1.0), Ok(()));
+		assert_eq!(fs_copy.ls_dir(_1_1_1.0).unwrap().len(), 0);
+		//
+		let mut fs_copy = fs.clone();
+		assert_eq!(fs, fs_copy);
+
+		assert_eq!(fs_copy.ls_dir(_1_1.0).unwrap().len(), 2);
+		assert_eq!(fs_copy.add_or_update_subtree(&[], _1_1.0), Ok(()));
+		assert_eq!(fs_copy.ls_dir(_1_1.0).unwrap().len(), 0);
+		//
+		let mut fs_copy = fs.clone();
+		assert_eq!(fs, fs_copy);
+
+		assert_eq!(fs_copy.ls_dir(_1.0).unwrap().len(), 2);
+		assert_eq!(fs_copy.add_or_update_subtree(&[], _1.0), Ok(()));
+		assert_eq!(fs_copy.ls_dir(_1.0).unwrap().len(), 0);
+		//
+		let mut fs_copy = fs.clone();
+		assert_eq!(fs, fs_copy);
+
+		assert_eq!(fs_copy.ls_dir(ROOT_ID).unwrap().len(), 1);
+		assert_eq!(fs_copy.add_or_update_subtree(&[], ROOT_ID), Ok(()));
+		assert_eq!(fs_copy.ls_dir(ROOT_ID).unwrap().len(), 0);
+	}
+
+	#[test]
+	fn test_update_node_with_new_and_existing_children() {
+		let seed = Seed::generate();
+		let (mut fs, _) = FileSystem::new(&seed);
+
+		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
+		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
+		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
+
+		let mut fs_copy = fs.clone();
+		assert_eq!(fs, fs_copy);
+
+		// add a few new nodes to a leaf dir
+		let _1_1_1_1_1 = fs.mkdir(_1_1_1_1.0, "_1_1_1_1_1").unwrap();
+		let _1_1_1_1_2 = fs.mkdir(_1_1_1_1.0, "_1_1_1_1_2").unwrap();
+		let _1_1_1_1_atxt = fs.touch(_1_1_1_1.0, "_1_1_1_1_a", "txt", &[]).unwrap();
+
+		assert_eq!(fs.ls_dir(_1_1_1_1.0).unwrap().len(), 3);
+
+		assert_eq!(
+			fs_copy.add_or_update_subtree(
+				&vec![
+					serde_json::from_slice(&_1_1_1_1_1.1).unwrap(),
+					serde_json::from_slice(&_1_1_1_1_2.1).unwrap(),
+					serde_json::from_slice(&_1_1_1_1_atxt.1).unwrap(),
+				],
+				_1_1_1_1.0
+			),
+			Ok(())
+		);
+
+		assert_eq!(fs, fs_copy);
+
+		// pretend some dirs are removed and some are updated
+		assert_eq!(
+			fs_copy.add_or_update_subtree(
+				&vec![
+					serde_json::from_slice(&_1_1.1).unwrap(),
+					serde_json::from_slice(&_1_1_atxt.1).unwrap(),
+					serde_json::from_slice(&_1_2.1).unwrap(),
+				],
+				_1.0
+			),
+			Ok(())
+		);
+
+		assert_eq!(fs_copy.ls_dir(_1.0).unwrap().len(), 2);
+		assert_eq!(fs_copy.node_by_id(_1_1_1_1_1.0), None);
+		assert_eq!(fs_copy.node_by_id(_1_1_1_1_2.0), None);
+		assert_eq!(fs_copy.node_by_id(_1_1_1_1_atxt.0), None);
+		assert_eq!(fs_copy.node_by_id(_1_1_1.0), None);
+		assert_eq!(fs_copy.node_by_id(_1_1_1_atxt.0), None);
+		assert_eq!(fs_copy.node_by_id(_1_1_1_btxt.0), None);
+		assert_eq!(fs_copy.node_by_id(_1_1_1_1.0), None);
 	}
 
 	#[test]

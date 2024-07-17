@@ -8,7 +8,8 @@ use crate::{
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID}, vault::FileSystem,
+	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID},
+	vault::FileSystem,
 };
 
 pub enum Error {

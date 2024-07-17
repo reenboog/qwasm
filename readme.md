@@ -3,7 +3,8 @@
 // TODO: use web_sys for storage and network?
 // FIXME: when dealing with bundles, don't forget about God who has none
 // TODO: the backend is to return and expect a hash to see, if there are any nodes to fetch
-// TODO: when returning nodes, the backend is to mark folders whose children are not in the list as dirty
+// TODO: when returning nodes, the backend is to mark folders whose children are not in the list as dirty, then:
+// if cur.dirty || cur.contains_any(dirty) fetch(cur).then(redraw)
 
 // INFO: the backend would need to check, if god already exists, for sure when an admin signs up
 
