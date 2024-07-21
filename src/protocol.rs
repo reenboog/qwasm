@@ -5,7 +5,10 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
-	register::Signup, seeds::ROOT_ID, user::{self, User}, vault::{self, LockedNode, Node}
+	register::Signup,
+	seeds::ROOT_ID,
+	user::{self, User},
+	vault::{self, LockedNode, Node},
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -60,7 +63,6 @@ pub struct NodeView {
 	created_at: u64,
 	name: String,
 	ext: Option<String>,
-	thumb: Option<Vec<u8>>,
 }
 
 #[wasm_bindgen]
@@ -79,10 +81,6 @@ impl NodeView {
 
 	pub fn created_at(&self) -> u64 {
 		self.created_at
-	}
-
-	pub fn thumbnail(&self) -> Option<Vec<u8>> {
-		self.thumb.clone()
 	}
 
 	pub fn ext(&self) -> Option<String> {
@@ -194,12 +192,12 @@ pub struct Protocol {
 
 impl From<Node> for NodeView {
 	fn from(node: Node) -> Self {
-		let (ext, thumb) = match node.entry {
-			vault::Entry::File { info } => (Some(info.ext), Some(info.thumbnail)),
+		let ext = match node.entry {
+			vault::Entry::File { info } => Some(info.ext),
 			vault::Entry::Dir {
 				seed: _,
 				children: _,
-			} => (None, None),
+			} => None,
 		};
 
 		Self {
@@ -207,7 +205,6 @@ impl From<Node> for NodeView {
 			created_at: node.created_at,
 			name: node.name,
 			ext,
-			thumb,
 		}
 	}
 }
@@ -445,17 +442,12 @@ impl Protocol {
 		}
 	}
 
-	pub async fn touch(
-		&mut self,
-		name: &str,
-		ext: &str,
-		thumbnail: &[u8],
-	) -> Result<NewFile, Error> {
+	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<NewFile, Error> {
 		if let Some(cd) = self.cd {
 			let (id, json) = self
 				.user
 				.fs
-				.touch(cd, name, ext, thumbnail)
+				.touch(cd, name, ext)
 				.map_err(|_| Error::NoAccess)?;
 
 			Ok(NewFile { id, json })

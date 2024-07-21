@@ -25,7 +25,6 @@ pub struct FileInfo {
 	uri_id: u64,
 	key_iv: Aes,
 	pub(crate) ext: String,
-	pub(crate) thumbnail: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -629,7 +628,6 @@ impl FileSystem {
 		parent_id: u64,
 		name: &str,
 		ext: &str,
-		thumbnail: &[u8],
 	) -> Result<(u64, Vec<u8>), Error> {
 		if let Some(node) = self.node_by_id_mut(parent_id) {
 			if let Entry::Dir {
@@ -648,7 +646,6 @@ impl FileSystem {
 							uri_id: id::generate(),
 							key_iv: Aes::new(),
 							ext: ext.to_string(),
-							thumbnail: thumbnail.to_vec(),
 						},
 					},
 					dirty: false,
@@ -716,7 +713,7 @@ mod tests {
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
 
 		assert_eq!(fs.ls_dir(ROOT_ID).unwrap().len(), 1);
 		assert_eq!(fs.ls_dir(_1.0).unwrap().len(), 2);
@@ -743,7 +740,7 @@ mod tests {
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
 
 		let locked_nodes = vec![
 			&root_json,
@@ -775,7 +772,7 @@ mod tests {
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
 
 		assert!(eval_share(&mut fs, _1_1_1_atxt.0, _1_1_1.0));
 		assert!(eval_share(&mut fs, _1_1_1.0, _1_1.0));
@@ -801,7 +798,7 @@ mod tests {
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
 
 		let share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let locked_nodes = vec![
@@ -831,11 +828,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_ctxt = fs.touch(_1_1.0, "c", "txt", &[]).unwrap();
+		let _1_1_ctxt = fs.touch(_1_1.0, "c", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
@@ -880,11 +877,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 
 		let _1_1_1_share = fs.share_node(_1_1_1.0).unwrap();
 		let _1_2_share = fs.share_node(_1_2.0).unwrap();
@@ -922,11 +919,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -973,11 +970,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -1033,11 +1030,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
 
 		let mut fs_copy = fs.clone();
@@ -1076,11 +1073,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
 
 		let mut fs_copy = fs.clone();
@@ -1089,7 +1086,7 @@ mod tests {
 		// add a few new nodes to a leaf dir
 		let _1_1_1_1_1 = fs.mkdir(_1_1_1_1.0, "_1_1_1_1_1").unwrap();
 		let _1_1_1_1_2 = fs.mkdir(_1_1_1_1.0, "_1_1_1_1_2").unwrap();
-		let _1_1_1_1_atxt = fs.touch(_1_1_1_1.0, "_1_1_1_1_a", "txt", &[]).unwrap();
+		let _1_1_1_1_atxt = fs.touch(_1_1_1_1.0, "_1_1_1_1_a", "txt").unwrap();
 
 		assert_eq!(fs.ls_dir(_1_1_1_1.0).unwrap().len(), 3);
 
@@ -1138,11 +1135,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -1190,11 +1187,11 @@ mod tests {
 
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -1241,11 +1238,11 @@ mod tests {
 		let _1 = fs.mkdir(ROOT_ID, "1").unwrap();
 		let _2 = fs.mkdir(ROOT_ID, "2").unwrap();
 		let _1_1 = fs.mkdir(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt", &[]).unwrap();
+		let _1_1_atxt = fs.touch(_1_1.0, "a1", "txt").unwrap();
 		let _1_2 = fs.mkdir(_1.0, "1_2").unwrap();
 		let _1_1_1 = fs.mkdir(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt", &[]).unwrap();
-		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt", &[]).unwrap();
+		let _1_1_1_atxt = fs.touch(_1_1_1.0, "a", "txt").unwrap();
+		let _1_1_1_btxt = fs.touch(_1_1_1.0, "b", "txt").unwrap();
 		let _1_1_1_1 = fs.mkdir(_1_1_1.0, "1_1_1_1").unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
