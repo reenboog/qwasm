@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 
 use crate::{
 	identity::{self},
@@ -14,17 +13,6 @@ pub enum Error {
 	WrongPass,
 	// FIXME: include json string
 	BadJson,
-}
-
-impl From<Error> for JsValue {
-	fn from(value: Error) -> Self {
-		use Error::*;
-
-		JsValue::from_str(match value {
-			WrongPass => "WrongPass",
-			BadJson => "BadJson",
-		})
-	}
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -51,36 +39,23 @@ impl LockedUser {
 	}
 }
 
-#[wasm_bindgen]
 #[derive(PartialEq, Debug)]
-pub struct Registered {
+pub struct Signup {
 	// to be sent to the backend
 	pub(crate) locked_user: Vec<u8>,
 	// to be used internally
 	pub(crate) user: User,
 }
 
-#[wasm_bindgen]
-impl Registered {
-	pub fn json(&self) -> Vec<u8> {
-		self.locked_user.clone()
-	}
-
-	pub fn user(&self) -> User {
-		self.user.clone()
-	}
-}
-
 // registration to upload (encrypted & encoded)
-#[wasm_bindgen]
-pub fn register_as_god(pass: &str) -> Registered {
+pub(crate) fn signup_as_god(pass: &str) -> Signup {
 	let identity = identity::Identity::generate(user::GOD_ID);
 	let (fs, root) = FileSystem::new(&User::fs_seed(identity.private()));
 
-	register_with_params(pass, identity, None, fs, vec![root])
+	signup_with_params(pass, identity, None, fs, vec![root])
 }
 
-pub fn register_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Registered, Error> {
+pub(crate) fn signup_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Signup, Error> {
 	let welcome: Welcome = serde_json::from_slice(welcome).map_err(|_| Error::BadJson)?;
 	// FIXME: verify sig here + pass email here?
 	let bundle = password_lock::unlock(welcome.imports, pin).map_err(|_| Error::WrongPass)?;
@@ -92,7 +67,7 @@ pub fn register_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Regist
 
 	let fs = FileSystem::from_locked_nodes(&welcome.nodes, &bundle.fs);
 
-	Ok(register_with_params(
+	Ok(signup_with_params(
 		pass,
 		identity::Identity::generate(welcome.user_id),
 		Some(import),
@@ -101,13 +76,13 @@ pub fn register_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Regist
 	))
 }
 
-fn register_with_params(
+fn signup_with_params(
 	pass: &str,
 	identity: identity::Identity,
 	import: Option<Import>,
 	fs: FileSystem,
 	nodes_to_upload: Vec<LockedNode>,
-) -> Registered {
+) -> Signup {
 	let locked_priv = password_lock::lock(identity.private(), pass).unwrap();
 	let _pub = identity.public();
 	let imports = import.map_or(Vec::new(), |s| vec![s]);
@@ -130,7 +105,7 @@ fn register_with_params(
 		roots: nodes_to_upload,
 	};
 
-	Registered {
+	Signup {
 		locked_user: serde_json::to_vec(&locked_user).unwrap(),
 		user: User {
 			identity,
@@ -186,15 +161,15 @@ mod tests {
 		user::{self},
 	};
 
-	use super::{register_as_admin, register_as_god, Registered};
+	use super::{signup_as_admin, signup_as_god, Signup};
 
 	#[test]
 	fn test_unlock() {
 		let pass = "simple_pass";
-		let Registered {
+		let Signup {
 			locked_user: json,
 			user,
-		} = register_as_god(&pass);
+		} = signup_as_god(&pass);
 		let unlock = user::unlock_with_pass(pass, &json);
 
 		assert_eq!(Ok(user), unlock);
@@ -203,10 +178,10 @@ mod tests {
 	#[test]
 	fn test_register_admin_and_unlock() {
 		let god_pass = "god_pass";
-		let Registered {
+		let Signup {
 			locked_user: locked_god,
 			user: god,
-		} = register_as_god(&god_pass);
+		} = signup_as_god(&god_pass);
 
 		let pin = "1234567890";
 		let invite = god.export_root_seeds_to_email(pin, "alice.mail.com");
@@ -221,10 +196,10 @@ mod tests {
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let admin_pass = "admin_pass";
-		let Registered {
+		let Signup {
 			locked_user: admin_json,
 			user: admin,
-		} = register_as_admin(admin_pass, &welcome, pin).unwrap();
+		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
 		// pretend the backend returns all locked nodes for this user
 		let mut decoded: LockedUser = serde_json::from_slice(&admin_json).unwrap();
@@ -239,10 +214,10 @@ mod tests {
 	#[test]
 	fn test_register_admin_by_admin() {
 		let god_pass = "god_pass";
-		let Registered {
+		let Signup {
 			locked_user,
 			user: god,
-		} = register_as_god(&god_pass);
+		} = signup_as_god(&god_pass);
 
 		let pin = "1234567890";
 		let invite = god.export_root_seeds_to_email(pin, "alice.mail.com");
@@ -256,10 +231,10 @@ mod tests {
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let admin_pass = "admin_pass";
-		let Registered {
+		let Signup {
 			locked_user,
 			user: admin,
-		} = register_as_admin(admin_pass, &welcome, pin).unwrap();
+		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
 		let new_pin = "555";
 		let new_pass = "new_admin_pass";
@@ -273,10 +248,10 @@ mod tests {
 			nodes: locked_user.roots,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
-		let Registered {
+		let Signup {
 			locked_user: new_admin_json,
 			user: new_admin,
-		} = register_as_admin(new_pass, &welcome, new_pin).unwrap();
+		} = signup_as_admin(new_pass, &welcome, new_pin).unwrap();
 		let new_unlocked_admin = user::unlock_with_pass(new_pass, &new_admin_json).unwrap();
 
 		assert_eq!(new_admin, new_unlocked_admin);

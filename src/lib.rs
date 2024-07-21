@@ -6,6 +6,7 @@ pub mod hkdf;
 pub mod hmac;
 pub mod identity;
 pub mod password_lock;
+pub mod protocol;
 pub mod register;
 pub mod seeds;
 pub mod user;

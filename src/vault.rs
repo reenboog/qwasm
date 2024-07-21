@@ -24,8 +24,8 @@ pub struct FileInfo {
 	// TODO: add file size
 	uri_id: u64,
 	key_iv: Aes,
-	ext: String,
-	thumbnail: Vec<u8>,
+	pub(crate) ext: String,
+	pub(crate) thumbnail: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -64,17 +64,17 @@ impl LockedContent {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-struct Node {
-	id: u64,
-	parent_id: u64,
-	created_at: u64,
-	name: String,
-	entry: Entry,
-	dirty: bool,
+pub(crate) struct Node {
+	pub(crate) id: u64,
+	pub(crate) parent_id: u64,
+	pub created_at: u64,
+	pub name: String,
+	pub(crate) entry: Entry,
+	pub dirty: bool,
 }
 
 #[derive(Clone, Debug)]
-enum Entry {
+pub(crate) enum Entry {
 	File { info: FileInfo },
 	Dir { seed: Seed, children: Vec<Node> },
 }
@@ -244,6 +244,8 @@ impl FileSystem {
 		parent_id: u64,
 	) -> Result<(), Error> {
 		if let Some(parent) = self.node_by_id_mut(parent_id) {
+			parent.dirty = false;
+
 			if let Entry::Dir {
 				ref seed,
 				ref mut children,
@@ -359,6 +361,7 @@ impl FileSystem {
 				}
 
 				*children = Self::build_hierarchy(&mut node_map, &branches, &roots);
+				// TODO: move dirty from Node to Entry::Dir and set to false here
 
 				Ok(())
 			} else {
@@ -619,6 +622,8 @@ impl FileSystem {
 		}
 	}
 
+	// FIXME: return FileInfo to expose the key? or simply return the key
+	// why? make them use an api to encrypt stuff and never share keys with js
 	pub fn touch(
 		&mut self,
 		parent_id: u64,

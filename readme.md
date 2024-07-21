@@ -8,7 +8,7 @@
 
 // INFO: the backend would need to check, if god already exists, for sure when an admin signs up
 
-// FIXME: if revoking through re-encryption (asym keys to be introduced then), whole subtree would be required + locking on the backend
+// FIXME: if revoking through re-encryption (asym keys to be introduced then), whole subtree would be required + locking on the backend (same as sym reencryption?)
 
 return `205`/`207`/`303` when access level/hierarchy is outdated? Or force refetch?
 
@@ -74,10 +74,10 @@ key = h(h_node + salt)
 by the first scheme relies on encryted seed which makes it a bit stronger
 
 
-{ id, parent, salt, content }
-{ id, parent, salt, content }
-{ id, parent, salt, content }
-{ id, parent, salt, content }
+{ id, parent, content }
+{ id, parent, content }
+{ id, parent, content }
+{ id, parent, content }
 
 // for tables, seed_id is not enough, wee need the whole table-column path
 // though such an id could be specified as 'table:column'

@@ -1,5 +1,3 @@
-use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
-
 use crate::{
 	aes_gcm,
 	database::{self, SeedById},
@@ -12,6 +10,7 @@ use crate::{
 	vault::FileSystem,
 };
 
+#[derive(Debug, PartialEq)]
 pub enum Error {
 	BadJson,
 	WrongPass,
@@ -21,24 +20,8 @@ pub enum Error {
 	NoAccess,
 }
 
-impl From<Error> for JsValue {
-	fn from(val: Error) -> Self {
-		use Error::*;
-
-		JsValue::from_str(match val {
-			BadJson => "BadJson",
-			WrongPass => "WrongPass",
-			BadSalt => "BadSalt",
-			BadKey => "BadKey",
-			CorruptData => "CorruptData",
-			NoAccess => "NoAccess",
-		})
-	}
-}
-
 pub(crate) const GOD_ID: u64 = 0;
 
-#[wasm_bindgen]
 #[derive(PartialEq, Debug, Clone)]
 pub struct User {
 	pub(crate) identity: Identity,
@@ -227,7 +210,6 @@ impl User {
 	}
 }
 
-#[wasm_bindgen]
 impl User {
 	// exort seeds as a LockedShare to a public key
 	// pub fn export_seeds_to_identity(&self, fs: &[u64], db: &[u64], identity: Identity::Public) -> Vec<u8>
@@ -245,22 +227,18 @@ impl User {
 	}
 
 	// FIXME: sign as well
-	pub fn encrypt_announcement(&self, msg: &str) -> Result<Vec<u8>, JsValue> {
+	pub fn encrypt_announcement(&self, msg: &str) -> Result<Vec<u8>, Error> {
 		self.encrypt_db_entry("messages", msg.as_bytes(), "text")
-			.map_err(|e| e.into())
 	}
 
-	pub fn decrypt_announcement(&self, encrypted: &[u8]) -> Result<String, JsValue> {
+	pub fn decrypt_announcement(&self, encrypted: &[u8]) -> Result<String, Error> {
 		let pt = self.decrypt_db_entry("messages", encrypted, "text")?;
 
-		String::from_utf8(pt)
-			.map_err(|_| Error::CorruptData)
-			.map_err(|e| e.into())
+		String::from_utf8(pt).map_err(|_| Error::CorruptData)
 	}
 }
 
-#[wasm_bindgen]
-pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
+pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
 	let decrypted_priv = password_lock::unlock(
 		serde_json::from_slice(&locked.encrypted_priv).map_err(|_| Error::BadJson)?,
@@ -332,7 +310,7 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, JsValue> {
 #[cfg(test)]
 mod tests {
 	use crate::{
-		register::{register_as_admin, register_as_god, LockedUser, Registered},
+		register::{signup_as_admin, signup_as_god, LockedUser, Signup},
 		seeds::{Invite, Welcome},
 		user::unlock_with_pass,
 	};
@@ -340,10 +318,10 @@ mod tests {
 	#[test]
 	fn test_encrypt_announcement() {
 		let god_pass = "god_pass";
-		let Registered {
+		let Signup {
 			locked_user,
 			user: god,
-		} = register_as_god(&god_pass);
+		} = signup_as_god(&god_pass);
 		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
 
 		let pin = "1234567890";
@@ -357,10 +335,10 @@ mod tests {
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let admin_pass = "admin_pass";
-		let Registered {
+		let Signup {
 			locked_user: admin_json,
 			user: admin,
-		} = register_as_admin(admin_pass, &welcome, pin).unwrap();
+		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
 		// pretend the backend returns all locked nodes for this user
 		let mut decoded: LockedUser = serde_json::from_slice(&admin_json).unwrap();
