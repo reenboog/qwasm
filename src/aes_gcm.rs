@@ -52,6 +52,97 @@ pub struct Aes {
 	pub iv: Iv,
 }
 
+#[cfg(target_arch = "wasm32")]
+mod wasm_impl {
+	use super::Aes;
+	use js_sys::{Reflect, Uint8Array};
+	use wasm_bindgen::JsValue;
+	use wasm_bindgen_futures::JsFuture;
+	use web_sys::{window, CryptoKey};
+
+	impl Aes {
+		async fn import_key(key: &[u8]) -> Result<JsValue, JsValue> {
+			let key = Uint8Array::from(key);
+			let promise = window()
+				.unwrap()
+				.crypto()
+				.unwrap()
+				.subtle()
+				.import_key_with_str(
+					"raw",
+					&key,
+					"AES-GCM",
+					false,
+					&js_sys::Array::of2(
+						&JsValue::from_str("encrypt"),
+						&JsValue::from_str("decrypt"),
+					),
+				)
+				.unwrap();
+			let js_value = JsFuture::from(promise).await.unwrap();
+
+			Ok(js_value)
+		}
+
+		pub async fn encrypt_async(&self, pt: &[u8]) -> Vec<u8> {
+			let key = CryptoKey::from(Self::import_key(self.key.as_bytes()).await.unwrap());
+			let algorithm = js_sys::Object::new();
+
+			Reflect::set(
+				&algorithm,
+				&JsValue::from_str("name"),
+				&JsValue::from_str("AES-GCM"),
+			)
+			.unwrap();
+			Reflect::set(
+				&algorithm,
+				&JsValue::from_str("iv"),
+				&Uint8Array::from(&self.iv.as_bytes()[..]),
+			)
+			.unwrap();
+
+			let promise = window()
+				.unwrap()
+				.crypto()
+				.unwrap()
+				.subtle()
+				.encrypt_with_object_and_u8_array(&algorithm, &key, pt)
+				.unwrap();
+			let ct = JsFuture::from(promise).await.unwrap();
+
+			js_sys::Uint8Array::new(&ct).to_vec()
+		}
+
+		pub async fn decrypt_async(&self, ct: &[u8]) -> Result<Vec<u8>, JsValue> {
+			let key = CryptoKey::from(Self::import_key(self.key.as_bytes()).await?);
+			let algorithm = js_sys::Object::new();
+
+			Reflect::set(
+				&algorithm,
+				&JsValue::from_str("name"),
+				&JsValue::from_str("AES-GCM"),
+			)
+			.unwrap();
+			Reflect::set(
+				&algorithm,
+				&JsValue::from_str("iv"),
+				&Uint8Array::from(&self.iv.as_bytes()[..]),
+			)
+			.unwrap();
+
+			let promise = window()
+				.unwrap()
+				.crypto()
+				.unwrap()
+				.subtle()
+				.decrypt_with_object_and_u8_array(&algorithm, &key, ct)?;
+			let pt = JsFuture::from(promise).await?;
+
+			Ok(Uint8Array::new(&pt).to_vec())
+		}
+	}
+}
+
 impl Aes {
 	pub fn new() -> Self {
 		Self::new_with_key_iv(Key::generate(), Iv::generate())
@@ -63,6 +154,16 @@ impl Aes {
 
 	pub fn new_with_key_iv(key: Key, iv: Iv) -> Self {
 		Self { key, iv }
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	pub async fn encrypt_async(&self, pt: &[u8]) -> Vec<u8> {
+		self.encrypt(pt)
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	pub async fn decrypt_async(&self, ct: &[u8]) -> Result<Vec<u8>, Error> {
+		self.decrypt(ct)
 	}
 
 	pub fn encrypt(&self, pt: &[u8]) -> Vec<u8> {
