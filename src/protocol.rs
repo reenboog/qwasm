@@ -1,6 +1,6 @@
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use js_sys::{Promise, Uint8Array};
+use js_sys::{Array, Promise, Uint8Array};
 use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
@@ -8,7 +8,7 @@ use crate::{
 	register::Signup,
 	seeds::ROOT_ID,
 	user::{self, User},
-	vault::{self, LockedNode, Node},
+	vault::{self, LockedNode, NewNodeReq, Node},
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -35,6 +35,16 @@ impl From<Error> for JsValue {
 			JsViolated => "JsViolated",
 			NoAccess => "NoAccess",
 		})
+	}
+}
+
+impl From<vault::Error> for Error {
+	fn from(er: vault::Error) -> Self {
+		match er {
+			vault::Error::NotFound => Self::NotFound,
+			vault::Error::BadOperation => Self::BadOperation,
+			vault::Error::NoAccess => Self::NoAccess,
+		}
 	}
 }
 
@@ -88,46 +98,12 @@ impl NodeView {
 	}
 }
 
-#[wasm_bindgen]
-pub struct NewDir {
-	id: u64,
-	// locked node
-	json: Vec<u8>,
-}
-
-#[wasm_bindgen]
-impl NewDir {
-	pub fn id(&self) -> u64 {
-		self.id
-	}
-
-	pub fn json(&self) -> Vec<u8> {
-		self.json.clone()
-	}
-}
-
-#[wasm_bindgen]
-pub struct NewFile {
-	id: u64,
-	// locked node
-	json: Vec<u8>,
-}
-
-#[wasm_bindgen]
-impl NewFile {
-	pub fn id(&self) -> u64 {
-		self.id
-	}
-
-	pub fn json(&self) -> Vec<u8> {
-		self.json.clone()
-	}
-}
-
 // #[async_trait]
 #[async_trait(?Send)]
 pub(crate) trait Network {
 	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error>;
+	// the backend may mark these uploads as pending at first and as complete when all data has been transmitted
+	async fn upload_nodes(&self, nodes: &[Vec<u8>]) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -147,13 +123,21 @@ pub(crate) trait Cache {
 #[wasm_bindgen]
 pub struct JsNet {
 	pub(crate) fetch_subtree: js_sys::Function,
+	pub(crate) upload_nodes: js_sys::Function,
+	// upload user
+	// fetch user
+	// fetch session lock
+	// upload session lock
 }
 
 #[wasm_bindgen]
 impl JsNet {
 	#[wasm_bindgen(constructor)]
-	pub fn new(fetch_subtree: js_sys::Function) -> Self {
-		Self { fetch_subtree }
+	pub fn new(fetch_subtree: js_sys::Function, upload_nodes: js_sys::Function) -> Self {
+		Self {
+			fetch_subtree,
+			upload_nodes,
+		}
 	}
 }
 
@@ -161,12 +145,12 @@ impl JsNet {
 impl Network for JsNet {
 	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error> {
 		let this = JsValue::NULL;
-		// FIXME: js does not support u64 directly
 		let id = JsValue::from_f64(id as f64);
 		let promise = self
 			.fetch_subtree
 			.call1(&this, &id)
 			.map_err(|_| Error::JsViolated)?;
+		// TODO: handle http response
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
 		let result = js_future.await.map_err(|_| Error::NoNetwork)?;
 		let uint8_array = Uint8Array::new(&result);
@@ -175,6 +159,27 @@ impl Network for JsNet {
 			serde_json::from_slice(&byte_array).map_err(|_| Error::BadJson)?;
 
 		Ok(nodes)
+	}
+
+	async fn upload_nodes(&self, nodes: &[Vec<u8>]) -> Result<(), Error> {
+		let this = JsValue::NULL;
+		let js_nodes = nodes
+			.iter()
+			.map(|node| {
+				let uint8_array = Uint8Array::new_with_length(node.len() as u32);
+				uint8_array.copy_from(node.as_slice());
+				JsValue::from(uint8_array)
+			})
+			.collect::<Array>();
+		let promise = self
+			.upload_nodes
+			.call1(&this, &js_nodes)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		// TODO: handle http response
+		js_future.await.map_err(|_| Error::NoNetwork)?;
+
+		Ok(())
 	}
 }
 
@@ -431,30 +436,35 @@ impl Protocol {
 		self.ls_cur_mut_impl().await
 	}
 
-	pub async fn mkdir(&mut self, name: &str) -> Result<NewDir, Error> {
-		// TODO: upload from here
+	pub async fn mkdir(&mut self, name: &str) -> Result<u64, Error> {
 		if let Some(cd) = self.cd {
-			let (id, json) = self.user.fs.mkdir(cd, name).map_err(|_| Error::NoAccess)?;
+			let NewNodeReq { node, json } = self.user.fs.mkdir(cd, name)?;
 
-			Ok(NewDir { id, json })
+			// TODO: check response
+			self.net.upload_nodes(&vec![json]).await?;
+			let id = self.user.fs.insert_node(node)?;
+
+			Ok(id)
 		} else {
 			Err(Error::NoAccess)
 		}
 	}
 
-	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<NewFile, Error> {
+	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<u64, Error> {
 		if let Some(cd) = self.cd {
-			let (id, json) = self
-				.user
-				.fs
-				.touch(cd, name, ext)
-				.map_err(|_| Error::NoAccess)?;
+			let NewNodeReq { node, json } = self.user.fs.touch(cd, name, ext)?;
+			// TODO: check response
+			self.net.upload_nodes(&vec![json]).await?;
+			let id = self.user.fs.insert_node(node)?;
 
-			Ok(NewFile { id, json })
+			Ok(id)
 		} else {
 			Err(Error::NoAccess)
 		}
 	}
+
+	// TODO: encrypt/decrypt announcement
+	// aes_encrypt_block/aes_decrypt_block
 
 	// pub fn did_add_nodes(&mut self, locked_nodes: Vec<js_sys::Uint8Array>) {
 	// let locked_nodes = locked_nodes

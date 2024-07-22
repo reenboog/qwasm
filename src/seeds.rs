@@ -108,8 +108,4 @@ impl Bundle {
 	pub fn set_db(&mut self, id: u64, seed: Seed) {
 		self.db.insert(id, seed);
 	}
-
-	// pub fn id(&self) -> u64 {
-	// 	todo!()
-	// }
 }
