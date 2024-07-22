@@ -22,8 +22,8 @@ pub enum Error {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct FileInfo {
 	// TODO: add file size
-	uri_id: u64,
-	key_iv: Aes,
+	pub(crate) uri_id: u64,
+	pub(crate) key_iv: Aes,
 	pub(crate) ext: String,
 }
 

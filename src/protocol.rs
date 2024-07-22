@@ -463,8 +463,39 @@ impl Protocol {
 		}
 	}
 
+	pub async fn encrypt_block_for_file(&self, pt: &[u8], id: u64) -> Result<Uint8Array, Error> {
+		if let Some(node) = self.user.fs.node_by_id(id) {
+			if let vault::Entry::File { ref info } = node.entry {
+				let ct = info.key_iv.encrypt_async(pt).await;
+
+				Ok(Uint8Array::from(ct.as_slice()))
+			} else {
+				Err(Error::BadOperation)
+			}
+		} else {
+			Err(Error::NotFound)
+		}
+	}
+
+	pub async fn decrypt_block_for_file(&self, ct: &[u8], id: u64) -> Result<Uint8Array, Error> {
+		if let Some(node) = self.user.fs.node_by_id(id) {
+			if let vault::Entry::File { ref info } = node.entry {
+				let pt = info
+					.key_iv
+					.decrypt_async(ct)
+					.await
+					.map_err(|_| Error::NoAccess)?;
+
+				Ok(Uint8Array::from(pt.as_slice()))
+			} else {
+				Err(Error::BadOperation)
+			}
+		} else {
+			Err(Error::NotFound)
+		}
+	}
+
 	// TODO: encrypt/decrypt announcement
-	// aes_encrypt_block/aes_decrypt_block
 
 	// pub fn did_add_nodes(&mut self, locked_nodes: Vec<js_sys::Uint8Array>) {
 	// let locked_nodes = locked_nodes
