@@ -152,7 +152,18 @@ impl Network for JsNet {
 			.map_err(|_| Error::JsViolated)?;
 		// TODO: handle http response
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
-		let result = js_future.await.map_err(|_| Error::NoNetwork)?;
+		// TODO: properly parse errors
+		let result = js_future.await.map_err(|err| {
+			// if let Some(error_str) = err.as_string() {
+			// 	match from_str::<ErrorCode>(&error_str) {
+			// 		Ok(err_code) => FetchError::ApiErr(err_code),
+			// 		Err(_) => FetchError::NoNetwork,
+			// 	}
+			// } else {
+			// 	FetchError::NoNetwork
+			// }
+			Error::NoNetwork
+		})?;
 		let uint8_array = Uint8Array::new(&result);
 		let byte_array = uint8_array.to_vec();
 		let nodes: Vec<LockedNode> =
@@ -359,7 +370,7 @@ impl Protocol {
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	fn unlock_with_pass(pass: &str, locked_user: &[u8], net: JsNet) -> Result<Protocol, Error> {
+	pub fn unlock_with_pass(pass: &str, locked_user: &[u8], net: JsNet) -> Result<Protocol, Error> {
 		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net))
 	}
 
@@ -463,6 +474,7 @@ impl Protocol {
 		}
 	}
 
+	// for streaming, I need a mutable opaque object (aes basically)
 	pub async fn encrypt_block_for_file(&self, pt: &[u8], id: u64) -> Result<Uint8Array, Error> {
 		if let Some(node) = self.user.fs.node_by_id(id) {
 			if let vault::Entry::File { ref info } = node.entry {
