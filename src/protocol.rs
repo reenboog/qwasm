@@ -198,7 +198,6 @@ impl Network for JsNet {
 pub struct Protocol {
 	// current directory
 	cd: Option<u64>,
-	// FIXME: wrap with mutex?
 	user: User,
 
 	// callbacks

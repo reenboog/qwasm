@@ -180,11 +180,11 @@ mod tests {
 		let god_pass = "god_pass";
 		let Signup {
 			locked_user: locked_god,
-			user: god,
+			user: mut god,
 		} = signup_as_god(&god_pass);
 
 		let pin = "1234567890";
-		let invite = god.export_root_seeds_to_email(pin, "alice.mail.com");
+		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
 		let invite: Invite = serde_json::from_slice(&invite).unwrap();
 		let locked_god: LockedUser = serde_json::from_slice(&locked_god).unwrap();
 		let welcome = Welcome {
@@ -216,11 +216,11 @@ mod tests {
 		let god_pass = "god_pass";
 		let Signup {
 			locked_user,
-			user: god,
+			user: mut god,
 		} = signup_as_god(&god_pass);
 
 		let pin = "1234567890";
-		let invite = god.export_root_seeds_to_email(pin, "alice.mail.com");
+		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
 		let invite: Invite = serde_json::from_slice(&invite).unwrap();
 		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
 		let welcome = Welcome {
@@ -233,12 +233,12 @@ mod tests {
 		let admin_pass = "admin_pass";
 		let Signup {
 			locked_user,
-			user: admin,
+			user: mut admin,
 		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
 		let new_pin = "555";
 		let new_pass = "new_admin_pass";
-		let new_invite = admin.export_root_seeds_to_email(new_pin, "bob.mail.com");
+		let new_invite = admin.export_all_seeds_to_email(new_pin, "bob.mail.com");
 		let new_invite: Invite = serde_json::from_slice(&new_invite).unwrap();
 		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
 		let welcome = Welcome {

@@ -21,6 +21,20 @@ pub struct Database {
 	pub(crate) seeds: Seeds,
 }
 
+pub(crate) enum Index {
+	Table { table: String },
+	Column { table: String, column: String },
+}
+
+impl Index {
+	pub fn as_id(&self) -> u64 {
+		match self {
+			Index::Table { table } => id_for_table(table),
+			Index::Column { table, column } => id_for_column(table, column),
+		}
+	}
+}
+
 pub trait SeedById {
 	fn seed_by_id<F>(&self, id: u64, derive_fn: F) -> Option<Seed>
 	where

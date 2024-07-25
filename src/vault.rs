@@ -705,7 +705,6 @@ impl FileSystem {
 		}
 	}
 
-	// TODO: use RefCell and immutable self instead?
 	pub fn share_node(&mut self, id: u64) -> Result<Seed, Error> {
 		if let Some(seed) = self.cached_seeds.get(&id) {
 			Ok(seed.clone())

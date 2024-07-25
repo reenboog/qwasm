@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
 	aes_gcm,
 	database::{self, SeedById},
@@ -6,7 +8,7 @@ use crate::{
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID},
+	seeds::{self, Bundle, Export, Import, Invite, Seed, Seeds, ROOT_ID},
 	vault::FileSystem,
 };
 
@@ -38,48 +40,115 @@ impl User {
 		self.identity.id() == GOD_ID
 	}
 
-	// FIXME: fs and db is required here; hence return Result?
-	fn seeds_for_ids(&self, _fs_ids: &[u64], _db_ids: &[u64]) -> Bundle {
-		if self.is_god() {
-			// fs:
-			// 	docs/
-			//		*invoices/
-			//			*june.pdf
-			//			*july.pdf
-			//			*...
-			//		contracts/
-			//			*upgrade.pdf
-			//			contractors.pdf
-			//			*infra.pdf
-			//	*recordings/
-			//		*...
+	// None means `all available`
+	fn seeds_for_ids(
+		&mut self,
+		fs_ids: Option<&[u64]>,
+		db_ids: Option<&[database::Index]>,
+	) -> Bundle {
+		let mut bundle = Bundle::new();
+		let identity = self.identity.private();
 
-			// db:
-			// for db –	tables and (optionally) their columns, eg
-			// 	-users { address, email }
-			// 	-messages { * }
-			// db_ids.for_each id
-			//	1 seeds(id) else
-			//	2 tables.derive(table, column) else
-			//	3 root.derive(table, column) else NoAccess
-
-			// FIXME: for now, everybody would have access to the very root seeds
-			//	I'll always have a complete node tree
-			// fs_ids.for_each id
-			// 	1 node.get(id) else NoAccess
-			// so, export from a tree instead!
-			let mut bundle = Bundle::new();
-			let identity = self.identity.private();
-
-			bundle.set_db(ROOT_ID, Self::db_seed(identity));
-			bundle.set_fs(ROOT_ID, Self::fs_seed(identity));
-
-			bundle
+		if let Some(fs_ids) = fs_ids {
+			// this will work for both, got and regular admins
+			fs_ids.into_iter().for_each(|&id| {
+				if let Ok(seed) = self.fs.share_node(id) {
+					// TODO: should I throw NoAccess instead?
+					bundle.set_fs(id, seed);
+				}
+			});
 		} else {
-			// FIXME: for now, there will only be one share
-			// check imports or calculate from the file tree/db directly
-			self.imports.get(0).unwrap().bundle.clone()
+			// if multi-space is ever considered, export imports as well
+			if self.is_god() {
+				bundle.set_fs(ROOT_ID, Self::fs_seed(identity));
+			} else {
+				// share all existing imports
+				self.imports
+					.iter()
+					.flat_map(|im| &im.bundle.fs)
+					.for_each(|(id, seed)| {
+						bundle.set_fs(*id, seed.clone());
+					});
+			}
 		}
+
+		if let Some(db_ids) = db_ids {
+			if self.is_god() {
+				let db_seed = Self::db_seed(identity);
+
+				db_ids.iter().for_each(|idx| {
+					let id = idx.as_id();
+
+					match idx {
+						database::Index::Table { table } => {
+							bundle
+								.set_db(id, database::derive_table_seed_from_root(&db_seed, table));
+						}
+						database::Index::Column { table, column } => {
+							bundle.set_db(
+								id,
+								database::derive_column_seed_from_root(&db_seed, table, column),
+							);
+						}
+					}
+				});
+			} else {
+				let imports = self
+					.imports
+					.iter()
+					.flat_map(|im| &im.bundle.db)
+					.collect::<HashMap<_, _>>();
+
+				db_ids.iter().for_each(|idx| {
+					let id = idx.as_id();
+
+					if let Some(&seed) = imports.get(&id) {
+						bundle.set_db(id, seed.clone());
+					} else {
+						match idx {
+							database::Index::Table { table } => {
+								if let Some(db_seed) = imports.get(&ROOT_ID) {
+									bundle.set_db(
+										id,
+										database::derive_table_seed_from_root(db_seed, table),
+									);
+								}
+							}
+							database::Index::Column { table, column } => {
+								if let Some(table_seed) =
+									imports.get(&database::id_for_table(table))
+								{
+									bundle.set_db(
+										id,
+										database::derive_column_seed_from_table(table_seed, column),
+									);
+								} else if let Some(db_seed) = imports.get(&ROOT_ID) {
+									bundle.set_db(
+										id,
+										database::derive_column_seed_from_root(
+											db_seed, table, &column,
+										),
+									);
+								}
+							}
+						}
+					}
+				})
+			}
+		} else {
+			if self.is_god() {
+				bundle.set_db(ROOT_ID, Self::db_seed(identity));
+			} else {
+				self.imports
+					.iter()
+					.flat_map(|im| &im.bundle.db)
+					.for_each(|(id, seed)| {
+						bundle.set_db(*id, seed.clone());
+					});
+			}
+		}
+
+		bundle
 	}
 
 	fn derive_seed_with_label(identity: &identity::Private, label: &[u8]) -> Seed {
@@ -109,11 +178,11 @@ impl User {
 	// pin is just a password used to encrypt the seeds, if any
 	// at this point, all we know is an email address and the seeds
 	// FIXME: return Result, if seeds not found (in case of an incomplete tree)
-	fn share_seeds_to_email(
-		&self,
+	pub fn share_seeds_to_email(
+		&mut self,
 		pin: &str,
-		fs_ids: &[u64],
-		db_ids: &[u64],
+		fs_ids: Option<&[u64]>,
+		db_ids: Option<&[database::Index]>,
 		email: &str,
 	) -> Vec<u8> {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);
@@ -177,22 +246,25 @@ impl User {
 			.map(|s| s.bundle.db.clone())
 			.collect::<Vec<_>>();
 
-		let seed = if let Some(seed_from_col) = bundles
-			.seed_by_id(database::id_for_column(table, column), |s| {
+		let seed = if let Some(seed_from_col) =
+			bundles.seed_by_id(database::id_for_column(table, column), |s| {
+				// do I have a seed for this specific column?
 				database::derive_entry_seed_from_column(s, &salt)
 			}) {
 			Ok(seed_from_col)
-		} else if let Some(seed_from_table) = bundles
-			.seed_by_id(database::id_for_table(table), |s| {
+		} else if let Some(seed_from_table) =
+			bundles.seed_by_id(database::id_for_table(table), |s| {
+				// do I have a seed for this specific table?
 				database::derive_entry_seed_from_table(s, column, &salt)
 			}) {
 			Ok(seed_from_table)
 		} else if let Some(seed_from_root) = bundles.seed_by_id(ROOT_ID, |s| {
+			// do I have a root seed?
 			database::derive_entry_seed_from_root(s, table, column, &salt)
 		}) {
 			Ok(seed_from_root)
 		} else if self.is_god() {
-			// god doesn't keep bundles, so let's use his seed directly
+			// so, I'm god, hence I can derive any seed
 			Ok(database::derive_entry_seed_from_root(
 				&Self::db_seed(self.identity.private()),
 				table,
@@ -220,10 +292,10 @@ impl User {
 	// 	todo!()
 	// }
 
-	// export all root seeds; returns json-serialized Invite
+	// export all *available* seeds; returns json-serialized Invite
 	// used when creating new admins
-	pub fn export_root_seeds_to_email(&self, pin: &str, email: &str) -> Vec<u8> {
-		self.share_seeds_to_email(pin, &[], &[], email)
+	pub fn export_all_seeds_to_email(&mut self, pin: &str, email: &str) -> Vec<u8> {
+		self.share_seeds_to_email(pin, None, None, email)
 	}
 
 	// FIXME: sign as well
@@ -320,12 +392,12 @@ mod tests {
 		let god_pass = "god_pass";
 		let Signup {
 			locked_user,
-			user: god,
+			user: mut god,
 		} = signup_as_god(&god_pass);
 		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.export_root_seeds_to_email(pin, "alice.mail.com");
+		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
 		let invite: Invite = serde_json::from_slice(&invite).unwrap();
 		let welcome = Welcome {
 			user_id: invite.user_id,

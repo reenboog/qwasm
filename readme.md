@@ -1,4 +1,3 @@
-// FIXME: make all objects implement `free` – seems to be automatically implemented, is it not?
 // TODO: remove unused Serialized/Deserialized
 // TODO: use web_sys for storage and network?
 // FIXME: when dealing with bundles, don't forget about God who has none
