@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{
 	hkdf, id,
 	salt::Salt,
@@ -17,10 +15,7 @@ use crate::{
 // h_column = h(h_table + column_name)
 // h_item = h(h_column + item_salt)
 
-pub struct Database {
-	pub(crate) seeds: Seeds,
-}
-
+#[derive(Clone)]
 pub(crate) enum Index {
 	Table { table: String },
 	Column { table: String, column: String },

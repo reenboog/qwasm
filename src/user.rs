@@ -8,7 +8,7 @@ use crate::{
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, Bundle, Export, Import, Invite, Seed, Seeds, ROOT_ID},
+	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID},
 	vault::FileSystem,
 };
 
@@ -177,7 +177,6 @@ impl User {
 
 	// pin is just a password used to encrypt the seeds, if any
 	// at this point, all we know is an email address and the seeds
-	// FIXME: return Result, if seeds not found (in case of an incomplete tree)
 	pub fn share_seeds_to_email(
 		&mut self,
 		pin: &str,
@@ -381,10 +380,13 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 
 #[cfg(test)]
 mod tests {
+	use std::collections::HashMap;
+
 	use crate::{
+		database,
 		register::{signup_as_admin, signup_as_god, LockedUser, Signup},
-		seeds::{Invite, Welcome},
-		user::unlock_with_pass,
+		seeds::{Invite, Welcome, ROOT_ID},
+		user::{unlock_with_pass, User},
 	};
 
 	#[test]
@@ -432,5 +434,194 @@ mod tests {
 
 			assert_eq!(msg, pt);
 		}
+	}
+
+	#[test]
+	fn test_export_db_seeds() {
+		let god_pass = "god_pass";
+		let Signup {
+			locked_user: locked_god,
+			user: mut god,
+		} = signup_as_god(&god_pass);
+
+		let pin = "1234567890";
+		// share all root seeds
+		let invite = god.export_all_seeds_to_email(pin, "adaml@mail.com");
+		let invite: Invite = serde_json::from_slice(&invite).unwrap();
+		let roots = serde_json::from_slice::<LockedUser>(&locked_god)
+			.unwrap()
+			.roots;
+		let welcome = Welcome {
+			user_id: invite.user_id,
+			sender: invite.sender,
+			imports: invite.payload,
+			nodes: roots.clone(),
+		};
+		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let adam_pass = "adam_pass";
+		let Signup {
+			locked_user: _,
+			user: mut adam,
+		} = signup_as_admin(adam_pass, &welcome, pin).unwrap();
+
+		// all this user has for db is the root seed of the god
+		let db_seeds = adam
+			.imports
+			.iter()
+			.flat_map(|im| im.bundle.db.clone())
+			.collect::<HashMap<_, _>>();
+		assert_eq!(db_seeds.len(), 1);
+		assert_eq!(
+			db_seeds.get(&ROOT_ID),
+			Some(&User::db_seed(god.identity.private()))
+		);
+
+		// now adam selectively shares some seeds with eve
+		let eve_pin = "666";
+		let eve_pass = "eve_pass";
+		let idx_users = database::Index::Table {
+			table: "users".to_string(),
+		};
+		let idx_companies = database::Index::Table {
+			table: "companies".to_string(),
+		};
+		let idx_sales_id = database::Index::Column {
+			table: "sales".to_string(),
+			column: "id".to_string(),
+		};
+		let idx_requests_content = database::Index::Column {
+			table: "requests".to_string(),
+			column: "content".to_string(),
+		};
+		let eve_invite = adam.share_seeds_to_email(
+			eve_pin,
+			None,
+			Some(&[
+				idx_users.clone(),
+				idx_companies.clone(),
+				idx_sales_id.clone(),
+				idx_requests_content.clone(),
+			]),
+			"eve@mail.com",
+		);
+		let eve_invite: Invite = serde_json::from_slice(&eve_invite).unwrap();
+		let welcome = Welcome {
+			user_id: eve_invite.user_id,
+			sender: eve_invite.sender,
+			imports: eve_invite.payload,
+			nodes: roots.clone(),
+		};
+		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let Signup {
+			locked_user: _,
+			user: mut eve,
+		} = signup_as_admin(eve_pass, &welcome, eve_pin).unwrap();
+
+		// eve should have 4 shares
+		let db_seeds = eve
+			.imports
+			.iter()
+			.flat_map(|im| im.bundle.db.clone())
+			.collect::<HashMap<_, _>>();
+		assert_eq!(db_seeds.len(), 4);
+		assert_eq!(db_seeds.get(&ROOT_ID), None,);
+		vec![
+			idx_users,
+			idx_companies.clone(),
+			idx_sales_id,
+			idx_requests_content,
+		]
+		.into_iter()
+		.for_each(|idx| {
+			assert!(db_seeds.contains_key(&idx.as_id()));
+		});
+
+		// now eve share all her shares with abel
+		let abel_pin = "777";
+		let abel_pass = "abel_pass";
+		let abel_invite = eve.export_all_seeds_to_email(&abel_pin, "abel@mail.com");
+		let abel_invite: Invite = serde_json::from_slice(&abel_invite).unwrap();
+		// let locked_abel: LockedUser = serde_json::from_slice(&locked_eve).unwrap();
+		let welcome = Welcome {
+			user_id: abel_invite.user_id,
+			sender: abel_invite.sender,
+			imports: abel_invite.payload,
+			nodes: roots.clone(),
+		};
+		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let Signup {
+			locked_user: _,
+			user: mut eve,
+		} = signup_as_admin(abel_pass, &welcome, abel_pin).unwrap();
+		let db_seeds = eve
+			.imports
+			.iter()
+			.flat_map(|im| im.bundle.db.clone())
+			.collect::<HashMap<_, _>>();
+		assert_eq!(db_seeds.len(), 4);
+
+		// now eve shares some of her shares with cain
+		let cain_pin = "000";
+		let cain_pass = "cain_pass";
+		// try giving less than available (ok)
+		let idx_users_names = database::Index::Column {
+			table: "users".to_string(),
+			column: "name".to_string(),
+		};
+		let idx_users_age = database::Index::Column {
+			table: "users".to_string(),
+			column: "age".to_string(),
+		};
+		// try giving more than available (not ok)
+		let idx_sales = database::Index::Table {
+			table: "sales".to_string(),
+		};
+		let cain_invite = eve.share_seeds_to_email(
+			cain_pin,
+			None,
+			Some(&[
+				idx_users_names.clone(),
+				idx_users_age.clone(),
+				// just share an available index
+				idx_companies.clone(),
+				// should not be shared, since it's more than eve has
+				idx_sales,
+				// a few random indices
+				database::Index::Table {
+					table: "123".to_string(),
+				},
+				database::Index::Column {
+					table: "abc".to_ascii_lowercase(),
+					column: "def".to_string(),
+				},
+			]),
+			"eve@mail.com",
+		);
+		let cain_invite: Invite = serde_json::from_slice(&cain_invite).unwrap();
+		let welcome = Welcome {
+			user_id: cain_invite.user_id,
+			sender: cain_invite.sender,
+			imports: cain_invite.payload,
+			nodes: roots,
+		};
+		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let Signup {
+			locked_user: _,
+			user: cain,
+		} = signup_as_admin(cain_pass, &welcome, cain_pin).unwrap();
+
+		// eve should have 4 shares
+		let db_seeds = cain
+			.imports
+			.iter()
+			.flat_map(|im| im.bundle.db.clone())
+			.collect::<HashMap<_, _>>();
+		assert_eq!(db_seeds.len(), 3);
+		// cain should only have what was allowed for eve to share, not what she intended to share
+		vec![idx_users_names, idx_users_age, idx_companies]
+			.into_iter()
+			.for_each(|idx| {
+				assert!(db_seeds.contains_key(&idx.as_id()));
+			});
 	}
 }
