@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-use crate::{encrypted::Encrypted, identity, vault::LockedNode};
+use crate::{identity, password_lock, vault::LockedNode};
 
 pub(crate) const SEED_SIZE: usize = 32;
 pub(crate) const ROOT_ID: u64 = 0;
@@ -57,7 +57,7 @@ pub struct Invite {
 	// pin needs to be shared through a trusted channel, so no need to sign
 	pub(crate) sender: identity::Public,
 	pub(crate) email: String,
-	pub(crate) payload: Encrypted,
+	pub(crate) payload: password_lock::Lock,
 	// TODO: is it safe to have them unencrypted?
 	pub(crate) export: Export,
 	// sig
@@ -68,7 +68,7 @@ pub struct Welcome {
 	pub(crate) user_id: u64,
 	pub(crate) sender: identity::Public,
 	// email?
-	pub(crate) imports: Encrypted,
+	pub(crate) imports: password_lock::Lock,
 	// sig
 	// TODO: get_nodes(invite.export.fs.ids)
 	pub(crate) nodes: Vec<LockedNode>,

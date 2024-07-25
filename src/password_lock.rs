@@ -2,13 +2,15 @@
 // any data + eph_pass -> encrypted
 
 use argon2::{Config, ThreadMode, Variant, Version};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{aes_gcm, encrypted::Encrypted, hkdf, hmac, salt::Salt};
 
 #[derive(Debug)]
 pub enum Error {
 	Argon2Failed,
+	WrongKey,
+	BadJson,
 }
 
 #[cfg(not(test))]
@@ -43,20 +45,23 @@ const DEFAULT_CONFIG: Config = Config {
 	thread_mode: ThreadMode::Parallel,
 };
 
-// #[derive(Serialize, Deserialize, PartialEq, Debug)]
-// pub struct Lock {
-// 	pub(crate) ct: Vec<u8>,
-// 	pub(crate) salt: [u8; Salt::SIZE],
-// }
-
-pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Encrypted, Error> {
-	let salt = Salt::generate();
-	let ct = lock_with_params(pt, pass, &salt, &DEFAULT_CONFIG)?;
-
-	Ok(Encrypted { ct, salt })
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub struct Lock {
+	// pt encrypted with master_key
+	pub(crate) ct: Vec<u8>,
+	// master_key encrypted with pass
+	pub(crate) master_key: Encrypted,
 }
 
-pub fn lock<T>(pt: &T, pass: &str) -> Result<Encrypted, Error>
+pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Lock, Error> {
+	let salt = Salt::generate();
+	let master_key = aes_gcm::Aes::new();
+	let lock = lock_with_params(pt, pass, salt, master_key, &DEFAULT_CONFIG)?;
+
+	Ok(lock)
+}
+
+pub fn lock<T>(pt: &T, pass: &str) -> Result<Lock, Error>
 where
 	T: Serialize,
 {
@@ -65,26 +70,39 @@ where
 	lock_serialized(&serialized, pass)
 }
 
-fn lock_with_params(pt: &[u8], pass: &str, salt: &Salt, config: &Config) -> Result<Vec<u8>, Error> {
-	// FIXME: introduce master keys: enc(pt, mk) -> enc(mk, kdf(pass))
-	let aes = aes_from_params(pass, salt, config)?;
-
-	Ok(aes.encrypt(pt))
-}
-
-pub fn unlock(lock: Encrypted, pass: &str) -> Result<Vec<u8>, Error> {
-	unlock_with_params(&lock.ct, pass, &lock.salt, &DEFAULT_CONFIG)
-}
-
-fn unlock_with_params(
-	ct: &[u8],
+fn lock_with_params(
+	pt: &[u8],
 	pass: &str,
-	salt: &Salt,
+	salt: Salt,
+	master_key: aes_gcm::Aes,
 	config: &Config,
-) -> Result<Vec<u8>, Error> {
-	let aes = aes_from_params(pass, salt, config)?;
+) -> Result<Lock, Error> {
+	let ct = master_key.encrypt(pt);
+	let pass_aes = aes_from_params(pass, &salt, config)?;
+	let master_key_ct = pass_aes.encrypt(&master_key.as_bytes());
 
-	aes.decrypt(ct).map_err(|_| Error::Argon2Failed)
+	Ok(Lock {
+		ct,
+		master_key: Encrypted {
+			ct: master_key_ct,
+			salt,
+		},
+	})
+}
+
+pub fn unlock(lock: Lock, pass: &str) -> Result<Vec<u8>, Error> {
+	unlock_with_params(lock, pass, &DEFAULT_CONFIG)
+}
+
+fn unlock_with_params(lock: Lock, pass: &str, config: &Config) -> Result<Vec<u8>, Error> {
+	let pass_aes = aes_from_params(pass, &lock.master_key.salt, config)?;
+	let master_key = pass_aes
+		.decrypt(&lock.master_key.ct)
+		.map_err(|_| Error::Argon2Failed)?;
+	let master_key = aes_gcm::Aes::try_from(master_key.as_slice()).map_err(|_| Error::BadJson)?;
+	let pt = master_key.decrypt(&lock.ct).map_err(|_| Error::WrongKey)?;
+
+	Ok(pt)
 }
 
 fn aes_from_params(pass: &str, salt: &Salt, config: &Config) -> Result<aes_gcm::Aes, Error> {
@@ -100,6 +118,7 @@ fn aes_from_params(pass: &str, salt: &Salt, config: &Config) -> Result<aes_gcm::
 mod tests {
 	use super::{lock_serialized, unlock, DEFAULT_CONFIG};
 	use crate::{
+		aes_gcm,
 		password_lock::{lock_with_params, unlock_with_params},
 		salt::Salt,
 	};
@@ -118,8 +137,9 @@ mod tests {
 		let msg = b"1234567890";
 		let pass = "password123";
 		let salt = Salt::generate();
-		let lock = lock_with_params(msg, pass, &salt, &TEST_CONFIG).unwrap();
-		let unlocked = unlock_with_params(&lock, pass, &salt, &TEST_CONFIG).unwrap();
+		let master_key = aes_gcm::Aes::new();
+		let lock = lock_with_params(msg, pass, salt, master_key, &TEST_CONFIG).unwrap();
+		let unlocked = unlock_with_params(lock, pass, &TEST_CONFIG).unwrap();
 
 		assert_eq!(msg.to_vec(), unlocked);
 	}
