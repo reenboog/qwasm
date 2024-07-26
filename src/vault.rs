@@ -40,6 +40,7 @@ pub(crate) struct LockedNode {
 	pub(crate) id: u64,
 	pub(crate) parent_id: u64,
 	pub(crate) content: Vec<u8>,
+	// sig
 	pub(crate) dirty: bool,
 }
 
@@ -47,9 +48,8 @@ pub(crate) struct LockedNode {
 struct LockedContent {
 	created_at: u64,
 	name: String,
-	// FIXME: introduce creator: identity::Public,
+	// FIXME: introduce creator_id: identity::Public,
 	// FIXME: introduce owner_sig: ed448::Signature,
-	// TODO: introduce acl_sig? (signed by the parent folder)
 	entry: LockedEntry,
 }
 

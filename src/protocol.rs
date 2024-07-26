@@ -20,6 +20,7 @@ pub enum Error {
 	BadJson,
 	WrongPass,
 	JsViolated,
+	ForgedSig,
 }
 
 impl From<Error> for JsValue {
@@ -33,6 +34,7 @@ impl From<Error> for JsValue {
 			WrongPass => "WrongPass",
 			BadOperation => "BadOperation",
 			JsViolated => "JsViolated",
+			ForgedSig => "ForgedSig",
 			NoAccess => "NoAccess",
 		})
 	}
@@ -264,7 +266,7 @@ impl Registered {
 
 impl Protocol {
 	#[cfg(not(target_arch = "wasm32"))]
-	pub(crate) fn register_as_god<T>(pass: &str, net: T) -> Registered
+	pub(crate) fn register_as_god<T>(pass: &str, net: T) -> Result<Registered, Error>
 	where
 		T: Network + 'static,
 	{
@@ -292,19 +294,19 @@ impl Protocol {
 		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net))
 	}
 
-	fn register_as_god_impl(pass: &str, net: Box<dyn Network>) -> Registered {
+	fn register_as_god_impl(pass: &str, net: Box<dyn Network>) -> Result<Registered, Error> {
 		use crate::register::signup_as_god;
 
-		let Signup { locked_user, user } = signup_as_god(pass);
+		let Signup { locked_user, user } = signup_as_god(pass).unwrap();
 
-		Registered {
+		Ok(Registered {
 			locked_user: locked_user,
 			protocol: Protocol {
 				cd: None,
 				user,
 				net,
 			},
-		}
+		})
 	}
 
 	fn register_as_admin_impl(
@@ -320,6 +322,7 @@ impl Protocol {
 			signup_as_admin(pass, welcome, pin).map_err(|e| match e {
 				register::Error::WrongPass => Error::WrongPass,
 				register::Error::BadJson => Error::BadJson,
+				register::Error::ForgedSig => Error::ForgedSig,
 			})?;
 
 		Ok(Registered {

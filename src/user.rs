@@ -8,7 +8,7 @@ use crate::{
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, Bundle, Export, Import, Invite, Seed, ROOT_ID},
+	seeds::{self, wrap_to_sign, Bundle, Export, Import, Invite, Seed, Sorted, ROOT_ID},
 	vault::FileSystem,
 };
 
@@ -186,19 +186,20 @@ impl User {
 	) -> Vec<u8> {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);
 		let payload = password_lock::lock(&bundle, pin).unwrap();
-		// TODO: sign({ id, sender, bundle or payload? })
-		let user_id = id::generate();
+
+		let receiver_id = id::generate();
+		let export = Export::from_bundle(&bundle, receiver_id);
+		let sig = self
+			.identity
+			.private()
+			.sign(&wrap_to_sign(self.identity.public(), &export));
 		let invite = Invite {
-			user_id,
+			user_id: receiver_id,
 			sender: self.identity.public().clone(),
 			email: email.to_string(),
 			payload,
-			export: Export {
-				receiver: user_id,
-				fs: bundle.fs.keys().cloned().collect(),
-				db: bundle.db.keys().cloned().collect(),
-			},
-			// sig,
+			export,
+			sig,
 		};
 
 		let serialized = serde_json::to_vec(&invite).unwrap();
@@ -298,6 +299,7 @@ impl User {
 	}
 
 	// FIXME: sign as well
+	//
 	pub fn encrypt_announcement(&self, msg: &str) -> Result<Vec<u8>, Error> {
 		self.encrypt_db_entry("messages", msg.as_bytes(), "text")
 	}
@@ -319,11 +321,14 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 
 	let _priv: identity::Private =
 		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;
-	// TODO: verify sigs for imports and exports
 
 	// for god, there should be one LockedNode (or more, if root's children) and no imports, so
 	// use use.fs_seed instead for admins, there could be several LockedNodes (subroots +
 	// children depending on depth) and LockedShares needed to decrypt the nodes
+
+	// failing always, even if there's just one forged share is not an option, since it's a potential
+	// ddos initiated by a compromised serve basically hence, I simply ignore any fake shares
+	// TODO: alternatively, a log could be introduced to collect any forged shares for manual inspection
 
 	// filter locked shares for export and import
 	let imports = locked
@@ -333,10 +338,24 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 			if s.export.receiver == locked.id() {
 				if let Ok(ref bytes) = _priv.decrypt(&s.payload) {
 					if let Ok(bundle) = serde_json::from_slice::<Bundle>(bytes) {
-						Some(Import {
-							sender: s.sender.clone(),
-							bundle,
-						})
+						let to_sign = wrap_to_sign(&s.sender, &s.export);
+						// make sure exports haven't been forged: verify sig + quantity
+						if s.sender.verify(&s.sig, &to_sign)
+							&& bundle.fs.keys().cloned().collect::<Vec<_>>().sorted()
+								== s.export.fs.sorted() && bundle
+							.db
+							.keys()
+							.cloned()
+							.collect::<Vec<_>>()
+							.sorted() == s.export.db.sorted()
+						{
+							Some(Import {
+								sender: s.sender.clone(),
+								bundle,
+							})
+						} else {
+							None
+						}
 					} else {
 						None
 					}
@@ -352,8 +371,15 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 		.shares
 		.iter()
 		.filter_map(|s| {
+			// I can't decrypt payloads here, since each is encrypted to a recipient's public key
 			if s.sender.id() == locked.id() {
-				Some(s.export.clone())
+				let to_sign = wrap_to_sign(&s.sender, &s.export);
+
+				if s.sender.verify(&s.sig, &to_sign) {
+					Some(s.export.clone())
+				} else {
+					None
+				}
 			} else {
 				None
 			}
@@ -395,7 +421,7 @@ mod tests {
 		let Signup {
 			locked_user,
 			user: mut god,
-		} = signup_as_god(&god_pass);
+		} = signup_as_god(&god_pass).unwrap();
 		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
 
 		let pin = "1234567890";
@@ -406,6 +432,7 @@ mod tests {
 			sender: invite.sender,
 			imports: invite.payload,
 			nodes: locked_user.roots.clone(),
+			sig: invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let admin_pass = "admin_pass";
@@ -442,7 +469,7 @@ mod tests {
 		let Signup {
 			locked_user: locked_god,
 			user: mut god,
-		} = signup_as_god(&god_pass);
+		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
 		// share all root seeds
@@ -456,6 +483,7 @@ mod tests {
 			sender: invite.sender,
 			imports: invite.payload,
 			nodes: roots.clone(),
+			sig: invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let adam_pass = "adam_pass";
@@ -510,6 +538,7 @@ mod tests {
 			sender: eve_invite.sender,
 			imports: eve_invite.payload,
 			nodes: roots.clone(),
+			sig: eve_invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let Signup {
@@ -547,6 +576,7 @@ mod tests {
 			sender: abel_invite.sender,
 			imports: abel_invite.payload,
 			nodes: roots.clone(),
+			sig: abel_invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let Signup {
@@ -603,6 +633,7 @@ mod tests {
 			sender: cain_invite.sender,
 			imports: cain_invite.payload,
 			nodes: roots,
+			sig: cain_invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let Signup {

@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use crate::{identity, password_lock, vault::LockedNode};
+use crate::{ed448, hmac, identity, password_lock, vault::LockedNode};
 
 pub(crate) const SEED_SIZE: usize = 32;
 pub(crate) const ROOT_ID: u64 = 0;
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash)]
 pub struct Seed {
 	pub(crate) bytes: [u8; SEED_SIZE],
 }
@@ -39,6 +40,53 @@ pub struct Export {
 	pub(crate) db: Vec<u64>,
 }
 
+pub trait Sorted {
+	type Item;
+	fn sorted(&self) -> Vec<Self::Item>;
+}
+
+impl<T: Ord + Clone> Sorted for Vec<T> {
+	type Item = T;
+
+	fn sorted(&self) -> Vec<Self::Item> {
+		let mut refs: Vec<T> = self.clone();
+		refs.sort();
+
+		refs
+	}
+}
+
+impl Export {
+	pub fn from_bundle(bundle: &Bundle, receiver_id: u64) -> Self {
+		Self {
+			receiver: receiver_id,
+			fs: bundle.fs.keys().cloned().collect(),
+			db: bundle.db.keys().cloned().collect(),
+		}
+	}
+
+	pub fn hash(&self) -> hmac::Digest {
+		// sort first
+		let bytes = self
+			.fs
+			.sorted()
+			.iter()
+			.chain(self.db.sorted().iter())
+			.flat_map(|k| [k.to_be_bytes()].concat())
+			.collect::<Vec<_>>();
+		let sha = Sha256::digest([&bytes, self.receiver.to_be_bytes().as_slice()].concat());
+
+		hmac::Digest(sha.into())
+	}
+}
+pub(crate) fn wrap_to_sign(sender: &identity::Public, export: &Export) -> Vec<u8> {
+	[
+		sender.id().to_be_bytes().as_slice(),
+		export.hash().as_bytes(),
+	]
+	.concat()
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 // when unlocking, the backend is to return all LockedShare where id == sender.id() || export.receiver
 pub struct LockedShare {
@@ -47,20 +95,20 @@ pub struct LockedShare {
 	pub(crate) export: Export,
 	// encrypted content of the sahre
 	pub(crate) payload: identity::Encrypted,
-	// sig = sign({ sender, receiver, bundle_ids or bundles? })
+	// sig = sign({ sender, receiver, bundle_ids })
+	pub(crate) sig: ed448::Signature,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Invite {
-	// TODO: is it safe to have it unencrypted?
 	pub(crate) user_id: u64,
 	// pin needs to be shared through a trusted channel, so no need to sign
 	pub(crate) sender: identity::Public,
 	pub(crate) email: String,
+	// encrypted Bundle
 	pub(crate) payload: password_lock::Lock,
-	// TODO: is it safe to have them unencrypted?
 	pub(crate) export: Export,
-	// sig
+	pub(crate) sig: ed448::Signature,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -69,10 +117,10 @@ pub struct Welcome {
 	pub(crate) sender: identity::Public,
 	// email?
 	pub(crate) imports: password_lock::Lock,
-	// sig
+	// sign(sender + id + bundle.ids')
+	pub(crate) sig: ed448::Signature,
 	// TODO: get_nodes(invite.export.fs.ids)
 	pub(crate) nodes: Vec<LockedNode>,
-	// db related stuff? – rather not, since it's passed via bundles
 }
 
 pub type Seeds = HashMap<u64, Seed>;

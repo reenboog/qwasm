@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+	ed448,
 	identity::{self},
 	password_lock,
-	seeds::{Bundle, Export, Import, LockedShare, Welcome},
+	seeds::{self, Bundle, Export, Import, LockedShare, Welcome},
 	user::{self, User, GOD_ID},
 	vault::{FileSystem, LockedNode},
 };
@@ -13,6 +14,7 @@ pub enum Error {
 	WrongPass,
 	// FIXME: include json string
 	BadJson,
+	ForgedSig,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -48,7 +50,7 @@ pub struct Signup {
 }
 
 // registration to upload (encrypted & encoded)
-pub(crate) fn signup_as_god(pass: &str) -> Signup {
+pub(crate) fn signup_as_god(pass: &str) -> Result<Signup, Error> {
 	let identity = identity::Identity::generate(user::GOD_ID);
 	let (fs, root) = FileSystem::new(&User::fs_seed(identity.private()));
 
@@ -57,7 +59,6 @@ pub(crate) fn signup_as_god(pass: &str) -> Signup {
 
 pub(crate) fn signup_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Signup, Error> {
 	let welcome: Welcome = serde_json::from_slice(welcome).map_err(|_| Error::BadJson)?;
-	// FIXME: verify sig here + pass email here?
 	let bundle = password_lock::unlock(welcome.imports, pin).map_err(|_| Error::WrongPass)?;
 	let bundle: Bundle = serde_json::from_slice(&bundle).map_err(|_| Error::BadJson)?;
 	let import = Import {
@@ -67,54 +68,65 @@ pub(crate) fn signup_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<S
 
 	let fs = FileSystem::from_locked_nodes(&welcome.nodes, &bundle.fs);
 
-	Ok(signup_with_params(
+	signup_with_params(
 		pass,
 		identity::Identity::generate(welcome.user_id),
-		Some(import),
+		Some((import, welcome.sig)),
 		fs,
 		vec![],
-	))
+	)
 }
 
 fn signup_with_params(
 	pass: &str,
 	identity: identity::Identity,
-	import: Option<Import>,
+	import: Option<(Import, ed448::Signature)>,
 	fs: FileSystem,
 	nodes_to_upload: Vec<LockedNode>,
-) -> Signup {
+) -> Result<Signup, Error> {
 	let locked_priv = password_lock::lock(identity.private(), pass).unwrap();
 	let _pub = identity.public();
-	let imports = import.map_or(Vec::new(), |s| vec![s]);
 	let id = identity.id();
+	let imports = import.map_or(Vec::new(), |s| vec![s]);
+	let shares = imports
+		.iter()
+		.map(|im| {
+			let sender = im.0.sender.clone();
+			let bundle = im.0.bundle.clone();
+			let export = Export::from_bundle(&bundle, id);
+			let to_sign = seeds::wrap_to_sign(&sender, &export);
+			let sig = im.1.clone();
+
+			if sender.verify(&sig, &to_sign) {
+				Ok(LockedShare {
+					sender,
+					export,
+					payload: _pub.encrypt(bundle),
+					sig,
+				})
+			} else {
+				Err(Error::ForgedSig)
+			}
+		})
+		.collect::<Result<_, _>>()?;
+
 	let locked_user = LockedUser {
 		encrypted_priv: serde_json::to_vec(&locked_priv).unwrap(),
 		_pub: _pub.clone(),
-		shares: imports
-			.iter()
-			.map(|im| LockedShare {
-				sender: im.sender.clone(),
-				export: Export {
-					receiver: id,
-					fs: im.bundle.fs.keys().cloned().collect(),
-					db: im.bundle.db.keys().cloned().collect(),
-				},
-				payload: _pub.encrypt(im.bundle.clone()),
-			})
-			.collect(),
+		shares,
 		roots: nodes_to_upload,
 	};
 
-	Signup {
+	Ok(Signup {
 		locked_user: serde_json::to_vec(&locked_user).unwrap(),
 		user: User {
 			identity,
-			imports,
+			imports: imports.into_iter().map(|im| im.0).collect(),
 			// the inviting party will have this updated after the first login following the recipient's registration
 			exports: Vec::new(),
 			fs,
 		},
-	}
+	})
 }
 
 /*
@@ -169,7 +181,7 @@ mod tests {
 		let Signup {
 			locked_user: json,
 			user,
-		} = signup_as_god(&pass);
+		} = signup_as_god(&pass).unwrap();
 		let unlock = user::unlock_with_pass(pass, &json);
 
 		assert_eq!(Ok(user), unlock);
@@ -181,7 +193,7 @@ mod tests {
 		let Signup {
 			locked_user: locked_god,
 			user: mut god,
-		} = signup_as_god(&god_pass);
+		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
 		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
@@ -193,6 +205,7 @@ mod tests {
 			imports: invite.payload,
 			// pretend these nodes are coming from the backend
 			nodes: locked_god.roots.clone(),
+			sig: invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let admin_pass = "admin_pass";
@@ -217,7 +230,7 @@ mod tests {
 		let Signup {
 			locked_user,
 			user: mut god,
-		} = signup_as_god(&god_pass);
+		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
 		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
@@ -228,6 +241,7 @@ mod tests {
 			sender: invite.sender,
 			imports: invite.payload,
 			nodes: locked_user.roots,
+			sig: invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let admin_pass = "admin_pass";
@@ -246,6 +260,7 @@ mod tests {
 			sender: new_invite.sender,
 			imports: new_invite.payload,
 			nodes: locked_user.roots,
+			sig: new_invite.sig,
 		};
 		let welcome = serde_json::to_vec(&welcome).unwrap();
 		let Signup {
