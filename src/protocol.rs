@@ -357,7 +357,7 @@ impl Protocol {
 #[wasm_bindgen]
 impl Protocol {
 	#[cfg(target_arch = "wasm32")]
-	pub fn register_as_god(pass: &str, net: JsNet) -> Registered {
+	pub fn register_as_god(pass: &str, net: JsNet) -> Result<Registered, Error> {
 		Self::register_as_god_impl(pass, Box::new(net))
 	}
 
@@ -507,6 +507,20 @@ impl Protocol {
 		} else {
 			Err(Error::NotFound)
 		}
+	}
+
+	pub fn encrypt_announcement(&self, msg: &str) -> Result<Uint8Array, Error> {
+		self.user
+			.encrypt_announcement(msg)
+			.map_or(Err(Error::NoAccess), |ct| {
+				Ok(Uint8Array::from(ct.as_slice()))
+			})
+	}
+
+	pub fn decrypt_announcement(&self, ct: &[u8]) -> Result<String, Error> {
+		self.user
+			.decrypt_announcement(ct)
+			.map_err(|_| Error::NoAccess)
 	}
 
 	// TODO: encrypt/decrypt announcement

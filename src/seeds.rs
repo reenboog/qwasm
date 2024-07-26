@@ -95,7 +95,7 @@ pub struct LockedShare {
 	pub(crate) export: Export,
 	// encrypted content of the sahre
 	pub(crate) payload: identity::Encrypted,
-	// sig = sign({ sender, receiver, bundle_ids })
+	// sign({ sender, exports })
 	pub(crate) sig: ed448::Signature,
 }
 
@@ -108,6 +108,7 @@ pub struct Invite {
 	// encrypted Bundle
 	pub(crate) payload: password_lock::Lock,
 	pub(crate) export: Export,
+	// sign({ sender, exports })
 	pub(crate) sig: ed448::Signature,
 }
 
@@ -117,7 +118,7 @@ pub struct Welcome {
 	pub(crate) sender: identity::Public,
 	// email?
 	pub(crate) imports: password_lock::Lock,
-	// sign(sender + id + bundle.ids')
+	// = Invite::sig
 	pub(crate) sig: ed448::Signature,
 	// TODO: get_nodes(invite.export.fs.ids)
 	pub(crate) nodes: Vec<LockedNode>,
