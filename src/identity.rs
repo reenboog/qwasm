@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
 	aes_gcm,
 	ed448::{KeyPairEd448, PrivateKeyEd448, PublicKeyEd448, Signature},
-	hkdf, id,
+	hkdf, hmac,
 	x448::{dh_exchange, KeyPairX448, PrivateKeyX448, PublicKeyX448},
 };
 
@@ -82,6 +83,19 @@ impl Public {
 
 	pub fn verify(&self, sig: &Signature, msg: &[u8]) -> bool {
 		self.ed448.verify(msg, sig)
+	}
+
+	pub fn hash(&self) -> hmac::Digest {
+		let bytes = [
+			self.x448.as_bytes().as_slice(),
+			self.ed448.as_bytes(),
+			&self.id().to_be_bytes(),
+		]
+		.concat();
+
+		let sha = Sha256::digest(&bytes);
+
+		hmac::Digest(sha.into())
 	}
 }
 

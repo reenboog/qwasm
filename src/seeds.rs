@@ -79,7 +79,7 @@ impl Export {
 		hmac::Digest(sha.into())
 	}
 }
-pub(crate) fn wrap_to_sign(sender: &identity::Public, export: &Export) -> Vec<u8> {
+pub(crate) fn ctx_to_sign(sender: &identity::Public, export: &Export) -> Vec<u8> {
 	[
 		sender.id().to_be_bytes().as_slice(),
 		export.hash().as_bytes(),

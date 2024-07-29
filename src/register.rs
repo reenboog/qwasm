@@ -52,7 +52,7 @@ pub struct Signup {
 // registration to upload (encrypted & encoded)
 pub(crate) fn signup_as_god(pass: &str) -> Result<Signup, Error> {
 	let identity = identity::Identity::generate(user::GOD_ID);
-	let (fs, root) = FileSystem::new(&User::fs_seed(identity.private()));
+	let (fs, root) = FileSystem::new(&User::fs_seed(identity.private()), &identity);
 
 	signup_with_params(pass, identity, None, fs, vec![root])
 }
@@ -94,7 +94,7 @@ fn signup_with_params(
 			let sender = im.0.sender.clone();
 			let bundle = im.0.bundle.clone();
 			let export = Export::from_bundle(&bundle, id);
-			let to_sign = seeds::wrap_to_sign(&sender, &export);
+			let to_sign = seeds::ctx_to_sign(&sender, &export);
 			let sig = im.1.clone();
 
 			if sender.verify(&sig, &to_sign) {

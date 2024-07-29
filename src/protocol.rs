@@ -46,6 +46,7 @@ impl From<vault::Error> for Error {
 			vault::Error::NotFound => Self::NotFound,
 			vault::Error::BadOperation => Self::BadOperation,
 			vault::Error::NoAccess => Self::NoAccess,
+			vault::Error::ForgedSig => Self::ForgedSig,
 		}
 	}
 }
@@ -451,7 +452,7 @@ impl Protocol {
 
 	pub async fn mkdir(&mut self, name: &str) -> Result<u64, Error> {
 		if let Some(cd) = self.cd {
-			let NewNodeReq { node, json } = self.user.fs.mkdir(cd, name)?;
+			let NewNodeReq { node, json } = self.user.fs.mkdir(cd, name, &self.user.identity)?;
 
 			// TODO: check response
 			self.net.upload_nodes(&vec![json]).await?;
@@ -465,7 +466,8 @@ impl Protocol {
 
 	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<u64, Error> {
 		if let Some(cd) = self.cd {
-			let NewNodeReq { node, json } = self.user.fs.touch(cd, name, ext)?;
+			let NewNodeReq { node, json } =
+				self.user.fs.touch(cd, name, ext, &self.user.identity)?;
 			// TODO: check response
 			self.net.upload_nodes(&vec![json]).await?;
 			let id = self.user.fs.insert_node(node)?;

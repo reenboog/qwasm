@@ -2,13 +2,15 @@ use std::collections::HashMap;
 
 use crate::{
 	aes_gcm::{self, Aes},
+	ed448,
 	encrypted::Encrypted,
 	hkdf::Hkdf,
-	id,
+	hmac, id, identity,
 	salt::Salt,
 	seeds::{self, Seed, Seeds, ROOT_ID},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(PartialEq, Debug)]
 pub enum Error {
@@ -17,6 +19,7 @@ pub enum Error {
 	BadOperation,
 	// TODO: add id
 	NoAccess,
+	ForgedSig,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -35,12 +38,31 @@ pub enum LockedEntry {
 	Dir { seed: Seed },
 }
 
+impl LockedEntry {
+	pub fn hash(&self) -> hmac::Digest {
+		use LockedEntry::*;
+
+		let bytes = match self {
+			File { info } => [
+				info.uri_id.to_be_bytes().as_slice(),
+				&info.key_iv.as_bytes(),
+				info.ext.as_bytes(),
+			]
+			.concat(),
+			Dir { seed } => seed.bytes.to_vec(),
+		};
+
+		let sha = Sha256::digest(&bytes);
+
+		hmac::Digest(sha.into())
+	}
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub(crate) struct LockedNode {
 	pub(crate) id: u64,
 	pub(crate) parent_id: u64,
 	pub(crate) content: Vec<u8>,
-	// sig?
 	pub(crate) dirty: bool,
 }
 
@@ -48,8 +70,11 @@ pub(crate) struct LockedNode {
 struct LockedContent {
 	created_at: u64,
 	name: String,
-	// FIXME: introduce creator_id: identity::Public,
-	// FIXME: introduce owner_sig: ed448::Signature,?
+	created_by: identity::Public,
+	// keep a chain between sig and last_edited sig?
+	// TODO: intorduce a list of edits?
+	// edit: { editerd_by, edited_at, sig }
+	sig: ed448::Signature,
 	entry: LockedEntry,
 }
 
@@ -60,11 +85,45 @@ pub(crate) struct NewNodeReq {
 }
 
 impl LockedContent {
-	fn try_from_encrypted(json: &[u8], aes: Aes) -> Result<Self, Error> {
+	fn try_from_encrypted(json: &[u8], aes: Aes, id: u64, parent_id: u64) -> Result<Self, Error> {
 		let pt = aes.decrypt(json).map_err(|_| Error::BadOperation)?;
-		let content = serde_json::from_slice(&pt).map_err(|_| Error::BadOperation)?;
+		let content: LockedContent =
+			serde_json::from_slice(&pt).map_err(|_| Error::BadOperation)?;
 
-		Ok(content)
+		if content.created_by.verify(
+			&content.sig,
+			&Self::ctx_to_sign(
+				content.created_at,
+				&content.name,
+				&content.created_by,
+				&content.entry,
+				id,
+				parent_id,
+			),
+		) {
+			Ok(content)
+		} else {
+			Err(Error::ForgedSig)
+		}
+	}
+
+	fn ctx_to_sign(
+		created_at: u64,
+		name: &str,
+		created_by: &identity::Public,
+		entry: &LockedEntry,
+		id: u64,
+		parent_id: u64,
+	) -> Vec<u8> {
+		[
+			created_at.to_be_bytes().as_slice(),
+			name.as_bytes(),
+			created_by.hash().as_bytes(),
+			entry.hash().as_bytes(),
+			id.to_be_bytes().as_slice(),
+			parent_id.to_be_bytes().as_slice(),
+		]
+		.concat()
 	}
 }
 
@@ -76,6 +135,8 @@ pub(crate) struct Node {
 	pub name: String,
 	pub(crate) entry: Entry,
 	pub dirty: bool,
+	pub(crate) created_by: identity::Public,
+	// last_edited_by
 }
 
 #[derive(Clone, Debug)]
@@ -130,21 +191,36 @@ fn aes_from_node_seed(seed: &Seed, salt: &Salt) -> Aes {
 }
 
 impl Node {
-	fn encrypt_with_parent_seed(node: &Node, parent: &Seed) -> Vec<u8> {
+	fn encrypt_with_parent_seed(
+		node: &Node,
+		parent: &Seed,
+		sign_by: &identity::Private,
+	) -> Vec<u8> {
 		let seed = seed_from_parent_for_node(parent, node.id);
 
-		Self::encrypt_to_serialized(node, &seed)
+		Self::encrypt_to_serialized(node, &seed, sign_by)
 	}
 
-	fn encrypt(node: &Node, node_seed: &Seed) -> LockedNode {
+	fn encrypt(node: &Node, node_seed: &Seed, sign_by: &identity::Private) -> LockedNode {
 		let entry = match &node.entry {
 			Entry::File { info } => LockedEntry::File { info: info.clone() },
 			Entry::Dir { seed, .. } => LockedEntry::Dir { seed: seed.clone() },
 		};
+		let to_sign = LockedContent::ctx_to_sign(
+			node.created_at,
+			&node.name,
+			&node.created_by,
+			&entry,
+			node.id,
+			node.parent_id,
+		);
+		let sig = sign_by.sign(&to_sign);
 		let locked_content = LockedContent {
 			created_at: node.created_at,
 			name: node.name.clone(),
 			entry,
+			created_by: node.created_by.clone(),
+			sig,
 		};
 		let locked_content = serde_json::to_vec(&locked_content).unwrap();
 		let salt = Salt::generate();
@@ -161,8 +237,12 @@ impl Node {
 		}
 	}
 
-	fn encrypt_to_serialized(node: &Node, node_seed: &Seed) -> Vec<u8> {
-		serde_json::to_vec(&Self::encrypt(node, node_seed)).unwrap()
+	fn encrypt_to_serialized(
+		node: &Node,
+		node_seed: &Seed,
+		sign_by: &identity::Private,
+	) -> Vec<u8> {
+		serde_json::to_vec(&Self::encrypt(node, node_seed, sign_by)).unwrap()
 	}
 }
 
@@ -193,7 +273,7 @@ fn now() -> u64 {
 
 impl FileSystem {
 	// returns FileSystem { root_node } & its json
-	pub fn new(fs_seed: &Seed) -> (Self, LockedNode) {
+	pub fn new(fs_seed: &Seed, owner: &identity::Identity) -> (Self, LockedNode) {
 		let id = ROOT_ID;
 		let parent_id = NO_PARENT_ID;
 		let created_at = now();
@@ -208,9 +288,10 @@ impl FileSystem {
 				seed,
 				children: Vec::new(),
 			},
+			created_by: owner.public().clone(),
 			dirty: false,
 		};
-		let locked_root = Node::encrypt(&node, fs_seed);
+		let locked_root = Node::encrypt(&node, fs_seed, owner.private());
 		let cached_seeds = vec![(id, fs_seed.clone())].into_iter().collect();
 
 		(
@@ -286,9 +367,12 @@ impl FileSystem {
 								locked_node.id,
 								&encrypted.salt,
 							);
-							if let Ok(content) =
-								LockedContent::try_from_encrypted(&encrypted.ct, aes)
-							{
+							if let Ok(content) = LockedContent::try_from_encrypted(
+								&encrypted.ct,
+								aes,
+								locked_node.id,
+								locked_node.parent_id,
+							) {
 								let node = Node {
 									id: locked_node.id,
 									parent_id: locked_node.parent_id,
@@ -302,6 +386,7 @@ impl FileSystem {
 										},
 									},
 									dirty: locked_node.dirty,
+									created_by: content.created_by,
 								};
 								node_map.insert(node.id, node);
 							}
@@ -331,6 +416,8 @@ impl FileSystem {
 											if let Ok(content) = LockedContent::try_from_encrypted(
 												&encrypted.ct,
 												aes,
+												locked_node.id,
+												locked_node.parent_id,
 											) {
 												let child_node = Node {
 													id: locked_node.id,
@@ -347,6 +434,7 @@ impl FileSystem {
 														},
 													},
 													dirty: locked_node.dirty,
+													created_by: content.created_by,
 												};
 
 												new_nodes.push((child_id, child_node));
@@ -406,7 +494,12 @@ impl FileSystem {
 			if let Some(locked_node) = locked_node_map.remove(node_id) {
 				if let Ok(encrypted) = serde_json::from_slice::<Encrypted>(&locked_node.content) {
 					let aes = aes_from_node_seed(seed, &encrypted.salt);
-					if let Ok(content) = LockedContent::try_from_encrypted(&encrypted.ct, aes) {
+					if let Ok(content) = LockedContent::try_from_encrypted(
+						&encrypted.ct,
+						aes,
+						locked_node.id,
+						locked_node.parent_id,
+					) {
 						let node = Node {
 							id: locked_node.id,
 							parent_id: locked_node.parent_id,
@@ -420,6 +513,7 @@ impl FileSystem {
 								},
 							},
 							dirty: locked_node.dirty,
+							created_by: content.created_by,
 						};
 						node_map.insert(node.id, node);
 					}
@@ -446,9 +540,12 @@ impl FileSystem {
 										&encrypted.salt,
 									);
 
-									if let Ok(content) =
-										LockedContent::try_from_encrypted(&encrypted.ct, aes)
-									{
+									if let Ok(content) = LockedContent::try_from_encrypted(
+										&encrypted.ct,
+										aes,
+										locked_node.id,
+										locked_node.parent_id,
+									) {
 										let child_node = Node {
 											id: locked_node.id,
 											parent_id: locked_node.parent_id,
@@ -462,6 +559,7 @@ impl FileSystem {
 												},
 											},
 											dirty: locked_node.dirty,
+											created_by: content.created_by,
 										};
 
 										new_nodes.push((child_id, child_node));
@@ -596,14 +694,24 @@ impl FileSystem {
 	}
 
 	// mkdir and immediately apply its transaction
-	pub fn mkdir_mut(&mut self, parent_id: u64, name: &str) -> Result<(u64, Vec<u8>), Error> {
-		let NewNodeReq { node, json } = self.mkdir(parent_id, name)?;
+	pub fn mkdir_mut(
+		&mut self,
+		parent_id: u64,
+		name: &str,
+		owner: &identity::Identity,
+	) -> Result<(u64, Vec<u8>), Error> {
+		let NewNodeReq { node, json } = self.mkdir(parent_id, name, owner)?;
 		let id = self.insert_node(node)?;
 
 		Ok((id, json))
 	}
 
-	pub fn mkdir(&self, parent_id: u64, name: &str) -> Result<NewNodeReq, Error> {
+	pub fn mkdir(
+		&self,
+		parent_id: u64,
+		name: &str,
+		owner: &identity::Identity,
+	) -> Result<NewNodeReq, Error> {
 		if let Some(node) = self.node_by_id(parent_id) {
 			if let Entry::Dir {
 				children: _,
@@ -621,8 +729,9 @@ impl FileSystem {
 						children: vec![],
 					},
 					dirty: false,
+					created_by: owner.public().clone(),
 				};
-				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed);
+				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed, owner.private());
 
 				Ok(NewNodeReq {
 					node: new_node,
@@ -662,14 +771,21 @@ impl FileSystem {
 		parent_id: u64,
 		name: &str,
 		ext: &str,
+		owner: &identity::Identity,
 	) -> Result<(u64, Vec<u8>), Error> {
-		let NewNodeReq { node, json } = self.touch(parent_id, name, ext)?;
+		let NewNodeReq { node, json } = self.touch(parent_id, name, ext, owner)?;
 		let id = self.insert_node(node)?;
 
 		Ok((id, json))
 	}
 
-	pub fn touch(&self, parent_id: u64, name: &str, ext: &str) -> Result<NewNodeReq, Error> {
+	pub fn touch(
+		&self,
+		parent_id: u64,
+		name: &str,
+		ext: &str,
+		owner: &identity::Identity,
+	) -> Result<NewNodeReq, Error> {
 		if let Some(node) = self.node_by_id(parent_id) {
 			if let Entry::Dir {
 				children: _,
@@ -690,8 +806,9 @@ impl FileSystem {
 						},
 					},
 					dirty: false,
+					created_by: owner.public().clone(),
 				};
-				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed);
+				let json = Node::encrypt_with_parent_seed(&new_node, parent_seed, owner.private());
 
 				Ok(NewNodeReq {
 					node: new_node,
@@ -731,6 +848,8 @@ impl FileSystem {
 
 #[cfg(test)]
 mod tests {
+	use identity::Identity;
+
 	use super::*;
 
 	fn is_dir(fs: &FileSystem, id: u64, name: &str, parent: u64) -> bool {
@@ -747,14 +866,15 @@ mod tests {
 
 	#[test]
 	fn test_create_mkdir_touch() {
+		let god = Identity::generate(0);
 		let seed = Seed::generate();
-		let (mut fs, _) = FileSystem::new(&seed);
+		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
 
 		assert_eq!(fs.ls_dir(ROOT_ID).unwrap().len(), 1);
 		assert_eq!(fs.ls_dir(_1.0).unwrap().len(), 2);
@@ -774,14 +894,15 @@ mod tests {
 	#[test]
 	fn test_from_locked_nodes_for_root() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
 
 		let locked_nodes = vec![
 			&root_json,
@@ -807,13 +928,14 @@ mod tests {
 	#[test]
 	fn test_share_individual_nodes() {
 		let seed = Seed::generate();
-		let (mut fs, _) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
 
 		assert!(eval_share(&mut fs, _1_1_1_atxt.0, _1_1_1.0));
 		assert!(eval_share(&mut fs, _1_1_1.0, _1_1.0));
@@ -832,14 +954,15 @@ mod tests {
 	#[test]
 	fn test_share_a_file() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
 
 		let share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let locked_nodes = vec![
@@ -864,16 +987,17 @@ mod tests {
 	#[test]
 	fn test_share_several_files_detached_as_roots() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_ctxt = fs.touch_mut(_1_1.0, "c", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_ctxt = fs.touch_mut(_1_1.0, "c", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
@@ -913,16 +1037,17 @@ mod tests {
 	#[test]
 	fn test_share_several_dirs_detached_as_roots() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
 
 		let _1_1_1_share = fs.share_node(_1_1_1.0).unwrap();
 		let _1_2_share = fs.share_node(_1_2.0).unwrap();
@@ -954,18 +1079,19 @@ mod tests {
 
 	#[test]
 	fn test_share_mixed() {
+		let god = Identity::generate(0);
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
-		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
@@ -1006,24 +1132,28 @@ mod tests {
 	#[test]
 	fn test_errors() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
-		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
 		let _1_2_share = fs.share_node(_1_2.0).unwrap();
 
 		assert_eq!(fs.share_node(9999999), Err(Error::NotFound));
-		assert_eq!(fs.mkdir_mut(_1_1_1_atxt.0, "bad"), Err(Error::BadOperation));
+		assert_eq!(
+			fs.mkdir_mut(_1_1_1_atxt.0, "bad", &god),
+			Err(Error::BadOperation)
+		);
 
 		let locked_nodes = vec![
 			&root_json,
@@ -1067,16 +1197,17 @@ mod tests {
 	#[test]
 	fn test_update_node_with_empty_children() {
 		let seed = Seed::generate();
-		let (mut fs, _) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
-		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let mut fs_copy = fs.clone();
 		assert_eq!(fs, fs_copy);
@@ -1110,24 +1241,25 @@ mod tests {
 	#[test]
 	fn test_update_node_with_new_and_existing_children() {
 		let seed = Seed::generate();
-		let (mut fs, _) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
-		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let mut fs_copy = fs.clone();
 		assert_eq!(fs, fs_copy);
 
 		// add a few new nodes to a leaf dir
-		let _1_1_1_1_1 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_1").unwrap();
-		let _1_1_1_1_2 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_2").unwrap();
-		let _1_1_1_1_atxt = fs.touch_mut(_1_1_1_1.0, "_1_1_1_1_a", "txt").unwrap();
+		let _1_1_1_1_1 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_1", &god).unwrap();
+		let _1_1_1_1_2 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_2", &god).unwrap();
+		let _1_1_1_1_atxt = fs.touch_mut(_1_1_1_1.0, "_1_1_1_1_a", "txt", &god).unwrap();
 
 		assert_eq!(fs.ls_dir(_1_1_1_1.0).unwrap().len(), 3);
 
@@ -1171,17 +1303,18 @@ mod tests {
 	#[test]
 	fn test_share_parents_and_children() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
-		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
@@ -1223,17 +1356,18 @@ mod tests {
 	#[test]
 	fn test_share_distant_relatives() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
-		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
@@ -1273,18 +1407,19 @@ mod tests {
 	#[test]
 	fn test_share_root_and_children() {
 		let seed = Seed::generate();
-		let (mut fs, root) = FileSystem::new(&seed);
+		let god = Identity::generate(0);
+		let (mut fs, root) = FileSystem::new(&seed, &god);
 		let root_json = serde_json::to_vec(&root).unwrap();
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1").unwrap();
-		let _2 = fs.mkdir_mut(ROOT_ID, "2").unwrap();
-		let _1_1 = fs.mkdir_mut(_1.0, "1_1").unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt").unwrap();
-		let _1_2 = fs.mkdir_mut(_1.0, "1_2").unwrap();
-		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1").unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt").unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt").unwrap();
-		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1").unwrap();
+		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _2 = fs.mkdir_mut(ROOT_ID, "2", &god).unwrap();
+		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
+		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();

@@ -8,7 +8,7 @@ use crate::{
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, wrap_to_sign, Bundle, Export, Import, Invite, Seed, Sorted, ROOT_ID},
+	seeds::{self, ctx_to_sign, Bundle, Export, Import, Invite, Seed, Sorted, ROOT_ID},
 	vault::FileSystem,
 };
 
@@ -192,7 +192,7 @@ impl User {
 		let sig = self
 			.identity
 			.private()
-			.sign(&wrap_to_sign(self.identity.public(), &export));
+			.sign(&ctx_to_sign(self.identity.public(), &export));
 		let invite = Invite {
 			user_id: receiver_id,
 			sender: self.identity.public().clone(),
@@ -338,7 +338,7 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 			if s.export.receiver == locked.id() {
 				if let Ok(ref bytes) = _priv.decrypt(&s.payload) {
 					if let Ok(bundle) = serde_json::from_slice::<Bundle>(bytes) {
-						let to_sign = wrap_to_sign(&s.sender, &s.export);
+						let to_sign = ctx_to_sign(&s.sender, &s.export);
 						// make sure exports haven't been forged: verify sig + quantity
 						if s.sender.verify(&s.sig, &to_sign)
 							&& bundle.fs.keys().cloned().collect::<Vec<_>>().sorted()
@@ -373,7 +373,7 @@ pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 		.filter_map(|s| {
 			// I can't decrypt payloads here, since each is encrypted to a recipient's public key
 			if s.sender.id() == locked.id() {
-				let to_sign = wrap_to_sign(&s.sender, &s.export);
+				let to_sign = ctx_to_sign(&s.sender, &s.export);
 
 				if s.sender.verify(&s.sig, &to_sign) {
 					Some(s.export.clone())
