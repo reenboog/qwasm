@@ -8,7 +8,7 @@ use crate::{
 	register::Signup,
 	seeds::ROOT_ID,
 	user::{self, User},
-	vault::{self, LockedNode, NewNodeReq, Node},
+	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -55,13 +55,17 @@ impl From<vault::Error> for Error {
 pub struct DirView {
 	items: Vec<NodeView>,
 	name: String,
-	// breadcrumbs?
+	breadcrumbs: Vec<NodeView>,
 }
 
 #[wasm_bindgen]
 impl DirView {
 	pub fn items(&self) -> Vec<NodeView> {
 		self.items.clone()
+	}
+
+	pub fn breadcrumbs(&self) -> Vec<NodeView> {
+		self.breadcrumbs.clone()
 	}
 
 	pub fn name(&self) -> String {
@@ -241,6 +245,7 @@ impl TryFrom<Node> for DirView {
 			Ok(DirView {
 				items,
 				name: dir.name,
+				breadcrumbs: Vec::new(), // TODO: fill in; nope, I need the whole tree
 			})
 		} else {
 			Err(Error::BadOperation)
@@ -399,7 +404,28 @@ impl Protocol {
 					// TODO: refactor to avoid recursion
 					self.ls_cur_mut_impl().await
 				} else {
-					Ok(node.clone().try_into()?)
+					let mut breadcrumbs = Vec::new();
+					let mut cur = node.parent_id;
+
+					while cur != NO_PARENT_ID {
+						let cur_node = self.user.fs.node_by_id(cur);
+
+						breadcrumbs.push(NodeView {
+							id: cur,
+							created_at: cur_node.map_or(0, |n| n.created_at),
+							name: cur_node.map_or("~".to_string(), |n| n.name.clone()),
+							ext: None,
+						});
+
+						cur = cur_node.map_or(NO_PARENT_ID, |n| n.parent_id);
+					}
+
+					breadcrumbs.reverse();
+
+					Ok(DirView {
+						breadcrumbs,
+						..node.clone().try_into()?
+					})
 				}
 			} else {
 				Ok(self.cd_to_root().await)
@@ -428,6 +454,7 @@ impl Protocol {
 			DirView {
 				items,
 				name: "~".to_string(),
+				breadcrumbs: Vec::new(),
 			}
 		}
 	}
