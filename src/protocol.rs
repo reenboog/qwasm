@@ -493,12 +493,54 @@ impl Protocol {
 		}
 	}
 
+	pub async fn chunk_encrypt_for_file(
+		&self,
+		chunk: &[u8],
+		file_id: u64,
+		chunk_idx: u32,
+	) -> Result<Uint8Array, Error> {
+		if let Some(node) = self.user.fs.node_by_id(file_id) {
+			if let vault::Entry::File { ref info } = node.entry {
+				let ct = info.key_iv.chunk_encrypt_async(chunk_idx, chunk).await;
+
+				Ok(Uint8Array::from(ct.as_slice()))
+			} else {
+				Err(Error::BadOperation)
+			}
+		} else {
+			Err(Error::NotFound)
+		}
+	}
+
 	pub async fn decrypt_block_for_file(&self, ct: &[u8], id: u64) -> Result<Uint8Array, Error> {
 		if let Some(node) = self.user.fs.node_by_id(id) {
 			if let vault::Entry::File { ref info } = node.entry {
 				let pt = info
 					.key_iv
 					.decrypt_async(ct)
+					.await
+					.map_err(|_| Error::NoAccess)?;
+
+				Ok(Uint8Array::from(pt.as_slice()))
+			} else {
+				Err(Error::BadOperation)
+			}
+		} else {
+			Err(Error::NotFound)
+		}
+	}
+
+	pub async fn chunk_decrypt_for_file(
+		&self,
+		chunk: &[u8],
+		file_id: u64,
+		chunk_idx: u32,
+	) -> Result<Uint8Array, Error> {
+		if let Some(node) = self.user.fs.node_by_id(file_id) {
+			if let vault::Entry::File { ref info } = node.entry {
+				let pt = info
+					.key_iv
+					.chunk_decrypt_async(chunk_idx, chunk)
 					.await
 					.map_err(|_| Error::NoAccess)?;
 

@@ -6,6 +6,8 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+use crate::hkdf;
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Key(pub [u8; Self::SIZE]);
 
@@ -54,14 +56,34 @@ pub struct Aes {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm_impl {
-	use super::Aes;
+	use super::{Aes, Error};
 	use js_sys::{Reflect, Uint8Array};
 	use wasm_bindgen::JsValue;
 	use wasm_bindgen_futures::JsFuture;
 	use web_sys::{window, CryptoKey};
 
+	impl From<Error> for JsValue {
+		fn from(value: Error) -> Self {
+			use Error::*;
+
+			JsValue::from_str(match value {
+				WrongKeyMaterial => "WrongKeyMaterial",
+				WrongKeyIvSize => "WrongKeyIvSize",
+			})
+		}
+	}
+
+	impl From<JsValue> for Error {
+		fn from(value: JsValue) -> Self {
+			match value.as_string().as_deref() {
+				Some("WrongKeyIvSize") => Error::WrongKeyIvSize,
+				_ => Error::WrongKeyMaterial,
+			}
+		}
+	}
+
 	impl Aes {
-		async fn import_key(key: &[u8]) -> Result<JsValue, JsValue> {
+		async fn import_key(key: &[u8]) -> Result<JsValue, Error> {
 			let key = Uint8Array::from(key);
 			let promise = window()
 				.unwrap()
@@ -113,7 +135,7 @@ mod wasm_impl {
 			js_sys::Uint8Array::new(&ct).to_vec()
 		}
 
-		pub async fn decrypt_async(&self, ct: &[u8]) -> Result<Vec<u8>, JsValue> {
+		pub async fn decrypt_async(&self, ct: &[u8]) -> Result<Vec<u8>, Error> {
 			let key = CryptoKey::from(Self::import_key(self.key.as_bytes()).await?);
 			let algorithm = js_sys::Object::new();
 
@@ -180,6 +202,38 @@ impl Aes {
 			.map_err(|_| Error::WrongKeyMaterial)
 	}
 
+	fn key_for_chunk_idx(&self, idx: u32) -> Self {
+		let chunk_key = hkdf::Hkdf::from_ikm(&self.as_bytes())
+			.expand::<{ Key::SIZE + Iv::SIZE }>(&idx.to_be_bytes());
+
+		Aes::from(&chunk_key)
+	}
+
+	pub fn chunk_encrypt(&self, idx: u32, pt: &[u8]) -> Vec<u8> {
+		let aes = self.key_for_chunk_idx(idx);
+
+		aes.encrypt(pt)
+	}
+
+	pub async fn chunk_encrypt_async(&self, idx: u32, pt: &[u8]) -> Vec<u8> {
+		let aes = self.key_for_chunk_idx(idx);
+
+		aes.encrypt_async(pt).await
+	}
+
+	pub fn chunk_decrypt(&self, idx: u32, ct: &[u8]) -> Result<Vec<u8>, Error> {
+		let aes = self.key_for_chunk_idx(idx);
+
+		aes.decrypt(ct)
+	}
+
+	pub async fn chunk_decrypt_async(&self, idx: u32, ct: &[u8]) -> Result<Vec<u8>, Error> {
+		let aes = self.key_for_chunk_idx(idx);
+
+		aes.decrypt_async(ct).await
+	}
+
+	// #[cfg(not(target_arch = "wasm32"))]
 	pub fn as_bytes(&self) -> [u8; Key::SIZE + Iv::SIZE] {
 		[
 			self.key.as_bytes().as_slice(),
@@ -217,6 +271,8 @@ impl From<&[u8; Key::SIZE + Iv::SIZE]> for Aes {
 
 #[cfg(test)]
 mod tests {
+	use rand::{rngs::OsRng, RngCore};
+
 	use super::{Aes, Error, Iv, Key};
 
 	#[test]
@@ -282,5 +338,51 @@ mod tests {
 			Err(Error::WrongKeyIvSize),
 			Aes::try_from(vec![1, 2, 3].as_slice())
 		);
+	}
+
+	#[test]
+	fn test_chunk_encrypt_decrypt() {
+		let aes = Aes::new();
+		// just an arbitrary size
+		let mut msg = [0u8; 193];
+
+		OsRng.fill_bytes(&mut msg);
+
+		let mut ct = Vec::new();
+		let mut pt = Vec::new();
+		let chunks = 10;
+		let pt_chunk_len = msg.len() / chunks;
+
+		for i in 0..chunks {
+			let start = i * pt_chunk_len;
+			let end = if i == chunks - 1 {
+				msg.len()
+			} else {
+				(i + 1) * pt_chunk_len
+			};
+			let chunk = &msg[start..end];
+			let encrypted_chunk = aes.chunk_encrypt(i as u32, chunk);
+			let decrypted_chunk = aes.chunk_decrypt(i as u32, &encrypted_chunk).unwrap();
+
+			assert_eq!(chunk, decrypted_chunk);
+
+			ct.extend(encrypted_chunk.into_iter());
+		}
+
+		// adjust to aes gcm's auth tag
+		let ct_chunk_len = pt_chunk_len + 16;
+		for i in 0..chunks {
+			let start = i * ct_chunk_len;
+			let end = if i == chunks - 1 {
+				ct.len()
+			} else {
+				(i + 1) * ct_chunk_len
+			};
+			let chunk = aes.chunk_decrypt(i as u32, &ct[start..end]).unwrap();
+
+			pt.extend(chunk.into_iter());
+		}
+
+		assert_eq!(msg.to_vec(), pt);
 	}
 }
