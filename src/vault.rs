@@ -62,7 +62,7 @@ impl LockedEntry {
 pub(crate) struct LockedNode {
 	pub(crate) id: u64,
 	pub(crate) parent_id: u64,
-	pub(crate) content: Vec<u8>,
+	pub(crate) content: Encrypted,
 	pub(crate) dirty: bool,
 }
 
@@ -222,12 +222,10 @@ impl Node {
 			created_by: node.created_by.clone(),
 			sig,
 		};
-		let locked_content = serde_json::to_vec(&locked_content).unwrap();
 		let salt = Salt::generate();
 		let aes = aes_from_node_seed(node_seed, &salt);
-		let ct = aes.encrypt(&locked_content);
+		let ct = aes.encrypt_serializable(&locked_content);
 		let encrypted = Encrypted { ct, salt };
-		let encrypted = serde_json::to_vec(&encrypted).unwrap();
 
 		LockedNode {
 			id: node.id,
@@ -359,37 +357,31 @@ impl FileSystem {
 
 				for node_id in &roots {
 					if let Some(locked_node) = locked_node_map.remove(&node_id) {
-						if let Ok(encrypted) =
-							serde_json::from_slice::<Encrypted>(&locked_node.content)
-						{
-							let aes = aes_from_parent_seed_for_node(
-								seed,
-								locked_node.id,
-								&encrypted.salt,
-							);
-							if let Ok(content) = LockedContent::try_from_encrypted(
-								&encrypted.ct,
-								aes,
-								locked_node.id,
-								locked_node.parent_id,
-							) {
-								let node = Node {
-									id: locked_node.id,
-									parent_id: locked_node.parent_id,
-									created_at: content.created_at,
-									name: content.name,
-									entry: match content.entry {
-										LockedEntry::File { info } => Entry::File { info },
-										LockedEntry::Dir { seed } => Entry::Dir {
-											seed,
-											children: vec![],
-										},
+						let encrypted = &locked_node.content;
+						let aes =
+							aes_from_parent_seed_for_node(seed, locked_node.id, &encrypted.salt);
+						if let Ok(content) = LockedContent::try_from_encrypted(
+							&encrypted.ct,
+							aes,
+							locked_node.id,
+							locked_node.parent_id,
+						) {
+							let node = Node {
+								id: locked_node.id,
+								parent_id: locked_node.parent_id,
+								created_at: content.created_at,
+								name: content.name,
+								entry: match content.entry {
+									LockedEntry::File { info } => Entry::File { info },
+									LockedEntry::Dir { seed } => Entry::Dir {
+										seed,
+										children: vec![],
 									},
-									dirty: locked_node.dirty,
-									created_by: content.created_by,
-								};
-								node_map.insert(node.id, node);
-							}
+								},
+								dirty: locked_node.dirty,
+								created_by: content.created_by,
+							};
+							node_map.insert(node.id, node);
 						}
 					}
 				}
@@ -404,42 +396,39 @@ impl FileSystem {
 							if let Some(child_ids) = branches.get(&id) {
 								for child_id in child_ids {
 									if let Some(locked_node) = locked_node_map.get(&child_id) {
-										if let Ok(encrypted) = serde_json::from_slice::<Encrypted>(
-											&locked_node.content,
+										let encrypted = &locked_node.content;
+										let aes = aes_from_parent_seed_for_node(
+											seed,
+											*child_id,
+											&encrypted.salt,
+										);
+
+										if let Ok(content) = LockedContent::try_from_encrypted(
+											&encrypted.ct,
+											aes,
+											locked_node.id,
+											locked_node.parent_id,
 										) {
-											let aes = aes_from_parent_seed_for_node(
-												seed,
-												*child_id,
-												&encrypted.salt,
-											);
-
-											if let Ok(content) = LockedContent::try_from_encrypted(
-												&encrypted.ct,
-												aes,
-												locked_node.id,
-												locked_node.parent_id,
-											) {
-												let child_node = Node {
-													id: locked_node.id,
-													parent_id: locked_node.parent_id,
-													created_at: content.created_at,
-													name: content.name.clone(),
-													entry: match content.entry {
-														LockedEntry::File { info } => {
-															Entry::File { info }
-														}
-														LockedEntry::Dir { seed } => Entry::Dir {
-															seed,
-															children: vec![],
-														},
+											let child_node = Node {
+												id: locked_node.id,
+												parent_id: locked_node.parent_id,
+												created_at: content.created_at,
+												name: content.name.clone(),
+												entry: match content.entry {
+													LockedEntry::File { info } => {
+														Entry::File { info }
+													}
+													LockedEntry::Dir { seed } => Entry::Dir {
+														seed,
+														children: vec![],
 													},
-													dirty: locked_node.dirty,
-													created_by: content.created_by,
-												};
+												},
+												dirty: locked_node.dirty,
+												created_by: content.created_by,
+											};
 
-												new_nodes.push((child_id, child_node));
-												to_process.push(*child_id);
-											}
+											new_nodes.push((child_id, child_node));
+											to_process.push(*child_id);
 										}
 									}
 								}
@@ -492,31 +481,31 @@ impl FileSystem {
 		// redundant bundles should probably be filtered form out here
 		for (node_id, seed) in bundles {
 			if let Some(locked_node) = locked_node_map.remove(node_id) {
-				if let Ok(encrypted) = serde_json::from_slice::<Encrypted>(&locked_node.content) {
-					let aes = aes_from_node_seed(seed, &encrypted.salt);
-					if let Ok(content) = LockedContent::try_from_encrypted(
-						&encrypted.ct,
-						aes,
-						locked_node.id,
-						locked_node.parent_id,
-					) {
-						let node = Node {
-							id: locked_node.id,
-							parent_id: locked_node.parent_id,
-							created_at: content.created_at,
-							name: content.name,
-							entry: match content.entry {
-								LockedEntry::File { info } => Entry::File { info },
-								LockedEntry::Dir { seed } => Entry::Dir {
-									seed,
-									children: vec![],
-								},
+				let encrypted = &locked_node.content;
+				let aes = aes_from_node_seed(seed, &encrypted.salt);
+
+				if let Ok(content) = LockedContent::try_from_encrypted(
+					&encrypted.ct,
+					aes,
+					locked_node.id,
+					locked_node.parent_id,
+				) {
+					let node = Node {
+						id: locked_node.id,
+						parent_id: locked_node.parent_id,
+						created_at: content.created_at,
+						name: content.name,
+						entry: match content.entry {
+							LockedEntry::File { info } => Entry::File { info },
+							LockedEntry::Dir { seed } => Entry::Dir {
+								seed,
+								children: vec![],
 							},
-							dirty: locked_node.dirty,
-							created_by: content.created_by,
-						};
-						node_map.insert(node.id, node);
-					}
+						},
+						dirty: locked_node.dirty,
+						created_by: content.created_by,
+					};
+					node_map.insert(node.id, node);
 				}
 			}
 		}
@@ -531,40 +520,34 @@ impl FileSystem {
 					if let Some(child_ids) = branches.get(&id) {
 						for child_id in child_ids {
 							if let Some(locked_node) = locked_node_map.get(&child_id) {
-								if let Ok(encrypted) =
-									serde_json::from_slice::<Encrypted>(&locked_node.content)
-								{
-									let aes = aes_from_parent_seed_for_node(
-										seed,
-										*child_id,
-										&encrypted.salt,
-									);
+								let encrypted = &locked_node.content;
+								let aes =
+									aes_from_parent_seed_for_node(seed, *child_id, &encrypted.salt);
 
-									if let Ok(content) = LockedContent::try_from_encrypted(
-										&encrypted.ct,
-										aes,
-										locked_node.id,
-										locked_node.parent_id,
-									) {
-										let child_node = Node {
-											id: locked_node.id,
-											parent_id: locked_node.parent_id,
-											created_at: content.created_at,
-											name: content.name.clone(),
-											entry: match content.entry {
-												LockedEntry::File { info } => Entry::File { info },
-												LockedEntry::Dir { seed } => Entry::Dir {
-													seed,
-													children: vec![],
-												},
+								if let Ok(content) = LockedContent::try_from_encrypted(
+									&encrypted.ct,
+									aes,
+									locked_node.id,
+									locked_node.parent_id,
+								) {
+									let child_node = Node {
+										id: locked_node.id,
+										parent_id: locked_node.parent_id,
+										created_at: content.created_at,
+										name: content.name.clone(),
+										entry: match content.entry {
+											LockedEntry::File { info } => Entry::File { info },
+											LockedEntry::Dir { seed } => Entry::Dir {
+												seed,
+												children: vec![],
 											},
-											dirty: locked_node.dirty,
-											created_by: content.created_by,
-										};
+										},
+										dirty: locked_node.dirty,
+										created_by: content.created_by,
+									};
 
-										new_nodes.push((child_id, child_node));
-										to_process.push(*child_id);
-									}
+									new_nodes.push((child_id, child_node));
+									to_process.push(*child_id);
 								}
 							}
 						}

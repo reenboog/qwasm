@@ -38,7 +38,6 @@ rand = { version = "0.8.5" }
 getrandom = { version = "0.2.14", features = ["js"] }
 
 # encoding
-hex = { version = "0.4.3" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 

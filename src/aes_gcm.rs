@@ -194,6 +194,15 @@ impl Aes {
 		cipher.encrypt(nonce, pt).unwrap()
 	}
 
+	pub fn encrypt_serializable<T>(&self, pt: T) -> Vec<u8>
+	where
+		T: Serialize,
+	{
+		let serialized = serde_json::to_vec(&pt).unwrap();
+
+		self.encrypt(&serialized)
+	}
+
 	pub fn decrypt(&self, ct: &[u8]) -> Result<Vec<u8>, Error> {
 		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.0));
 		let nonce = GenericArray::from_slice(&self.iv.0);

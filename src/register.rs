@@ -23,7 +23,6 @@ pub struct LockedUser {
 	pub(crate) encrypted_priv: Vec<u8>,
 	#[serde(rename = "pub")]
 	pub(crate) _pub: identity::Public,
-	#[serde(rename = "type")]
 	// exports & imports will be decoded from this; god has empty imports, always
 	pub(crate) shares: Vec<LockedShare>,
 	// get_nodes(locked_shares(user_id == share.receiver | user_id == 0 then node_id_root).export.fs.ids + children)
