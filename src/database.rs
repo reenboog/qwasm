@@ -16,7 +16,7 @@ use crate::{
 // h_item = h(h_column + item_salt)
 
 #[derive(Clone)]
-pub(crate) enum Index {
+pub enum Index {
 	Table { table: String },
 	Column { table: String, column: String },
 }

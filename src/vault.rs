@@ -226,6 +226,7 @@ impl Node {
 		let aes = aes_from_node_seed(node_seed, &salt);
 		let ct = aes.encrypt_serializable(&locked_content);
 		let encrypted = Encrypted { ct, salt };
+		// something is failing to serialize here
 
 		LockedNode {
 			id: node.id,

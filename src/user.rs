@@ -313,11 +313,8 @@ impl User {
 
 pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
 	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
-	let decrypted_priv = password_lock::unlock(
-		serde_json::from_slice(&locked.encrypted_priv).map_err(|_| Error::BadJson)?,
-		pass,
-	)
-	.map_err(|_| Error::WrongPass)?;
+	let decrypted_priv =
+		password_lock::unlock(&locked.encrypted_priv, pass).map_err(|_| Error::WrongPass)?;
 
 	let _priv: identity::Private =
 		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;

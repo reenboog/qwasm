@@ -20,7 +20,8 @@ pub enum Error {
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct LockedUser {
 	// password-encrypted identity::Private
-	pub(crate) encrypted_priv: Vec<u8>,
+	// aes_encrypted?
+	pub(crate) encrypted_priv: password_lock::Lock,
 	#[serde(rename = "pub")]
 	pub(crate) _pub: identity::Public,
 	// exports & imports will be decoded from this; god has empty imports, always
@@ -58,7 +59,7 @@ pub(crate) fn signup_as_god(pass: &str) -> Result<Signup, Error> {
 
 pub(crate) fn signup_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Signup, Error> {
 	let welcome: Welcome = serde_json::from_slice(welcome).map_err(|_| Error::BadJson)?;
-	let bundle = password_lock::unlock(welcome.imports, pin).map_err(|_| Error::WrongPass)?;
+	let bundle = password_lock::unlock(&welcome.imports, pin).map_err(|_| Error::WrongPass)?;
 	let bundle: Bundle = serde_json::from_slice(&bundle).map_err(|_| Error::BadJson)?;
 	let import = Import {
 		sender: welcome.sender,
@@ -110,7 +111,7 @@ fn signup_with_params(
 		.collect::<Result<_, _>>()?;
 
 	let locked_user = LockedUser {
-		encrypted_priv: serde_json::to_vec(&locked_priv).unwrap(),
+		encrypted_priv: locked_priv,
 		_pub: _pub.clone(),
 		shares,
 		roots: nodes_to_upload,

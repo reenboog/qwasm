@@ -53,7 +53,7 @@ pub struct Lock {
 	pub(crate) master_key: Encrypted,
 }
 
-pub fn lock_serialized(pt: &[u8], pass: &str) -> Result<Lock, Error> {
+fn lock_serialized(pt: &[u8], pass: &str) -> Result<Lock, Error> {
 	let salt = Salt::generate();
 	let master_key = aes_gcm::Aes::new();
 	let lock = lock_with_params(pt, pass, salt, master_key, &DEFAULT_CONFIG)?;
@@ -90,11 +90,11 @@ fn lock_with_params(
 	})
 }
 
-pub fn unlock(lock: Lock, pass: &str) -> Result<Vec<u8>, Error> {
+pub fn unlock(lock: &Lock, pass: &str) -> Result<Vec<u8>, Error> {
 	unlock_with_params(lock, pass, &DEFAULT_CONFIG)
 }
 
-fn unlock_with_params(lock: Lock, pass: &str, config: &Config) -> Result<Vec<u8>, Error> {
+fn unlock_with_params(lock: &Lock, pass: &str, config: &Config) -> Result<Vec<u8>, Error> {
 	let pass_aes = aes_from_params(pass, &lock.master_key.salt, config)?;
 	let master_key = pass_aes
 		.decrypt(&lock.master_key.ct)
@@ -139,7 +139,7 @@ mod tests {
 		let salt = Salt::generate();
 		let master_key = aes_gcm::Aes::new();
 		let lock = lock_with_params(msg, pass, salt, master_key, &TEST_CONFIG).unwrap();
-		let unlocked = unlock_with_params(lock, pass, &TEST_CONFIG).unwrap();
+		let unlocked = unlock_with_params(&lock, pass, &TEST_CONFIG).unwrap();
 
 		assert_eq!(msg.to_vec(), unlocked);
 	}
@@ -149,7 +149,7 @@ mod tests {
 		let msg = b"1234567890";
 		let pass = "password123";
 		let lock = lock_serialized(msg, pass).unwrap();
-		let unlocked = unlock(lock, "wrong_pass");
+		let unlocked = unlock(&lock, "wrong_pass");
 
 		assert!(unlocked.is_err());
 	}
