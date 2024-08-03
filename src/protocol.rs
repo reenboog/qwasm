@@ -110,7 +110,7 @@ impl NodeView {
 pub(crate) trait Network {
 	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error>;
 	// the backend may mark these uploads as pending at first and as complete when all data has been transmitted
-	async fn upload_nodes(&self, nodes: &[Vec<u8>]) -> Result<(), Error>;
+	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -179,19 +179,15 @@ impl Network for JsNet {
 		Ok(nodes)
 	}
 
-	async fn upload_nodes(&self, nodes: &[Vec<u8>]) -> Result<(), Error> {
+	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error> {
+		let serialized = serde_json::to_vec(nodes).unwrap();
+		let uint8_array = Uint8Array::new_with_length(serialized.len() as u32);
+		uint8_array.copy_from(&serialized.as_slice());
+		let json = JsValue::from(uint8_array);
 		let this = JsValue::NULL;
-		let js_nodes = nodes
-			.iter()
-			.map(|node| {
-				let uint8_array = Uint8Array::new_with_length(node.len() as u32);
-				uint8_array.copy_from(node.as_slice());
-				JsValue::from(uint8_array)
-			})
-			.collect::<Array>();
 		let promise = self
 			.upload_nodes
-			.call1(&this, &js_nodes)
+			.call1(&this, &json)
 			.map_err(|_| Error::JsViolated)?;
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
 		// TODO: handle http response
@@ -479,10 +475,11 @@ impl Protocol {
 
 	pub async fn mkdir(&mut self, name: &str) -> Result<u64, Error> {
 		if let Some(cd) = self.cd {
-			let NewNodeReq { node, json } = self.user.fs.mkdir(cd, name, &self.user.identity)?;
+			let NewNodeReq { node, locked_node } =
+				self.user.fs.mkdir(cd, name, &self.user.identity)?;
 
 			// TODO: check response
-			self.net.upload_nodes(&vec![json]).await?;
+			self.net.upload_nodes(&vec![locked_node]).await?;
 			let id = self.user.fs.insert_node(node)?;
 
 			Ok(id)
@@ -493,10 +490,10 @@ impl Protocol {
 
 	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<u64, Error> {
 		if let Some(cd) = self.cd {
-			let NewNodeReq { node, json } =
+			let NewNodeReq { node, locked_node } =
 				self.user.fs.touch(cd, name, ext, &self.user.identity)?;
 			// TODO: check response
-			self.net.upload_nodes(&vec![json]).await?;
+			self.net.upload_nodes(&vec![locked_node]).await?;
 			let id = self.user.fs.insert_node(node)?;
 
 			Ok(id)
