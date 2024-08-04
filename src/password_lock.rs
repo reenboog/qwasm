@@ -4,7 +4,13 @@
 use argon2::{Config, ThreadMode, Variant, Version};
 use serde::{Deserialize, Serialize};
 
-use crate::{aes_gcm, encrypted::Encrypted, hkdf, hmac, salt::Salt};
+use crate::{
+	aes_gcm,
+	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
+	encrypted::Encrypted,
+	hkdf, hmac,
+	salt::Salt,
+};
 
 #[derive(Debug)]
 pub enum Error {
@@ -48,6 +54,10 @@ const DEFAULT_CONFIG: Config = Config {
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Lock {
 	// pt encrypted with master_key
+	#[serde(
+		serialize_with = "serialize_vec_base64",
+		deserialize_with = "deserialize_vec_base64"
+	)]
 	pub(crate) ct: Vec<u8>,
 	// master_key encrypted with pass
 	pub(crate) master_key: Encrypted,

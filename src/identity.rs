@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
 	aes_gcm,
+	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
 	ed448::{KeyPairEd448, PrivateKeyEd448, PublicKeyEd448, Signature},
 	hkdf, hmac,
 	x448::{dh_exchange, KeyPairX448, PrivateKeyX448, PublicKeyX448},
@@ -51,6 +52,10 @@ pub struct Public {
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Encrypted {
 	// encrypted message
+	#[serde(
+		serialize_with = "serialize_vec_base64",
+		deserialize_with = "deserialize_vec_base64"
+	)]
 	ct: Vec<u8>,
 	// an ephemeral key, dh-ed with an identity pub key
 	eph_x448: PublicKeyX448,
@@ -111,9 +116,6 @@ impl Public {
 }
 
 impl Identity {
-	// should be explicitly called by js to please the gc gods
-	pub fn free(self) {}
-
 	pub fn id(&self) -> u64 {
 		self._pub.id()
 	}

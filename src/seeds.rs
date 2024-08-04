@@ -4,13 +4,21 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{ed448, hmac, identity, password_lock, vault::LockedNode};
+use crate::{
+	base64_blobs::{deserialize_array_base64, serialize_array_base64},
+	ed448, hmac, identity, password_lock,
+	vault::LockedNode,
+};
 
 pub(crate) const SEED_SIZE: usize = 32;
 pub(crate) const ROOT_ID: u64 = 0;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash)]
 pub struct Seed {
+	#[serde(
+		serialize_with = "serialize_array_base64::<_, SEED_SIZE>",
+		deserialize_with = "deserialize_array_base64::<_, SEED_SIZE>"
+	)]
 	pub(crate) bytes: [u8; SEED_SIZE],
 }
 

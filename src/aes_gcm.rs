@@ -1,3 +1,4 @@
+use crate::base64_blobs::{deserialize_array_base64, serialize_array_base64};
 use aes_gcm::{
 	aead::{generic_array::GenericArray, Aead, NewAead},
 	Aes256Gcm,
@@ -8,37 +9,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::hkdf;
 
+const KEY_SIZE: usize = 32;
+const IV_SIZE: usize = 12;
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Key(pub [u8; Self::SIZE]);
+pub struct Key {
+	#[serde(
+		serialize_with = "serialize_array_base64::<_, KEY_SIZE>",
+		deserialize_with = "deserialize_array_base64::<_, KEY_SIZE>"
+	)]
+	pub bytes: [u8; Self::SIZE],
+}
 
 impl Key {
-	pub const SIZE: usize = 32;
+	pub const SIZE: usize = KEY_SIZE;
 
 	pub fn generate() -> Self {
 		let mut key = [0u8; Self::SIZE];
 		OsRng.fill_bytes(&mut key);
-		Self(key)
+		Self { bytes: key }
 	}
 
 	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
-		&self.0
+		&self.bytes
 	}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Iv(pub [u8; Self::SIZE]);
+pub struct Iv {
+	#[serde(
+		serialize_with = "serialize_array_base64::<_, {IV_SIZE}>",
+		deserialize_with = "deserialize_array_base64::<_, IV_SIZE>"
+	)]
+	pub bytes: [u8; Self::SIZE],
+}
 
 impl Iv {
-	pub const SIZE: usize = 12;
+	pub const SIZE: usize = IV_SIZE;
 
 	pub fn generate() -> Self {
 		let mut iv = [0u8; Self::SIZE];
 		OsRng.fill_bytes(&mut iv);
-		Self(iv)
+		Self { bytes: iv }
 	}
 
 	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
-		&self.0
+		&self.bytes
 	}
 }
 
@@ -189,8 +205,8 @@ impl Aes {
 	}
 
 	pub fn encrypt(&self, pt: &[u8]) -> Vec<u8> {
-		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.0));
-		let nonce = GenericArray::from_slice(&self.iv.0);
+		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.bytes));
+		let nonce = GenericArray::from_slice(&self.iv.bytes);
 		cipher.encrypt(nonce, pt).unwrap()
 	}
 
@@ -204,8 +220,8 @@ impl Aes {
 	}
 
 	pub fn decrypt(&self, ct: &[u8]) -> Result<Vec<u8>, Error> {
-		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.0));
-		let nonce = GenericArray::from_slice(&self.iv.0);
+		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.bytes));
+		let nonce = GenericArray::from_slice(&self.iv.bytes);
 		cipher
 			.decrypt(nonce, ct)
 			.map_err(|_| Error::WrongKeyMaterial)
@@ -242,7 +258,6 @@ impl Aes {
 		aes.decrypt_async(ct).await
 	}
 
-	// #[cfg(not(target_arch = "wasm32"))]
 	pub fn as_bytes(&self) -> [u8; Key::SIZE + Iv::SIZE] {
 		[
 			self.key.as_bytes().as_slice(),
@@ -262,8 +277,12 @@ impl TryFrom<&[u8]> for Aes {
 			Err(Error::WrongKeyIvSize)
 		} else {
 			Ok(Self::new_with_key_iv(
-				Key(val[..Key::SIZE].try_into().unwrap()),
-				Iv(val[Key::SIZE..].try_into().unwrap()),
+				Key {
+					bytes: val[..Key::SIZE].try_into().unwrap(),
+				},
+				Iv {
+					bytes: val[Key::SIZE..].try_into().unwrap(),
+				},
 			))
 		}
 	}
@@ -272,8 +291,12 @@ impl TryFrom<&[u8]> for Aes {
 impl From<&[u8; Key::SIZE + Iv::SIZE]> for Aes {
 	fn from(val: &[u8; Key::SIZE + Iv::SIZE]) -> Self {
 		Self::new_with_key_iv(
-			Key(val[..Key::SIZE].try_into().unwrap()),
-			Iv(val[Key::SIZE..].try_into().unwrap()),
+			Key {
+				bytes: val[..Key::SIZE].try_into().unwrap(),
+			},
+			Iv {
+				bytes: val[Key::SIZE..].try_into().unwrap(),
+			},
 		)
 	}
 }
@@ -327,7 +350,14 @@ mod tests {
 
 	#[test]
 	fn test_new() {
-		let aes = Aes::new_with_key_iv(Key([12u8; Key::SIZE]), Iv([34u8; Iv::SIZE]));
+		let aes = Aes::new_with_key_iv(
+			Key {
+				bytes: [12u8; Key::SIZE],
+			},
+			Iv {
+				bytes: [34u8; Iv::SIZE],
+			},
+		);
 
 		let ref_pt = b"abcdefghijklmnopqrstuvwxyz";
 

@@ -45,7 +45,7 @@ macro_rules! key {
 
 		impl<T, const SIZE: usize> serde::Serialize for $type<T, SIZE> {
 			fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-				serializer.serialize_bytes(&self.bytes)
+				serializer.serialize_str(&base64::encode(self.bytes))
 			}
 		}
 
@@ -56,30 +56,25 @@ macro_rules! key {
 			{
 				struct Visitor<T, const SIZE: usize>(std::marker::PhantomData<T>);
 
-				use serde::de::{self};
-
 				impl<'de, T, const SIZE: usize> serde::de::Visitor<'de> for Visitor<T, SIZE> {
 					type Value = $type<T, SIZE>;
 
 					fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-						formatter.write_str(&format!("a byte array of length {}", SIZE))
+						formatter.write_str("a base64 encoded string")
 					}
 
-					fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+					fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
 					where
-						A: de::SeqAccess<'de>,
+						E: serde::de::Error,
 					{
-						let mut bytes = [0u8; SIZE];
-						for i in 0..SIZE {
-							bytes[i] = seq
-								.next_element()?
-								.ok_or_else(|| de::Error::invalid_length(i, &self))?;
-						}
+						let bytes = base64::decode(v).map_err(E::custom)?;
+						let bytes: [u8; SIZE] = bytes.as_slice().try_into().map_err(E::custom)?;
+
 						Ok($type::new(bytes))
 					}
 				}
 
-				deserializer.deserialize_seq(Visitor(std::marker::PhantomData))
+				deserializer.deserialize_str(Visitor(std::marker::PhantomData))
 			}
 		}
 	};
