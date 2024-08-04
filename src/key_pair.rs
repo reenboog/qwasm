@@ -76,8 +76,8 @@ mod tests {
 		let public = PublicKey::<TestKeyType, 4>::new(b"9876".to_owned());
 		let kp = KeyPair::<TestKeyType, 10, 4>::new(private, public);
 
-		let serialized = serde_json::to_vec(&kp).unwrap();
-		let deserialized = serde_json::from_slice(&serialized).unwrap();
+		let serialized = serde_json::to_string(&kp).unwrap();
+		let deserialized = serde_json::from_str(&serialized).unwrap();
 
 		assert_eq!(kp, deserialized);
 	}

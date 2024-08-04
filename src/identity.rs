@@ -178,8 +178,8 @@ mod tests {
 	#[test]
 	fn test_serialize_deserialized() {
 		let ident = Identity::generate(0);
-		let serialized = serde_json::to_vec(&ident).unwrap();
-		let deserialized = serde_json::from_slice(&serialized).unwrap();
+		let serialized = serde_json::to_string(&ident).unwrap();
+		let deserialized = serde_json::from_str(&serialized).unwrap();
 
 		assert_eq!(ident, deserialized);
 	}

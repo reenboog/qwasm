@@ -135,8 +135,8 @@ mod tests {
 	#[test]
 	fn test_serialize_deserialize() {
 		let key = TestKey::try_from(b"0123456789".to_vec()).unwrap();
-		let serialized = serde_json::to_vec(&key).unwrap();
-		let deserialized = serde_json::from_slice(&serialized).unwrap();
+		let serialized = serde_json::to_string(&key).unwrap();
+		let deserialized = serde_json::from_str(&serialized).unwrap();
 
 		assert_eq!(key, deserialized);
 	}

@@ -44,7 +44,7 @@ impl LockedUser {
 #[derive(PartialEq, Debug)]
 pub struct Signup {
 	// to be sent to the backend
-	pub(crate) locked_user: Vec<u8>,
+	pub(crate) locked_user: String,
 	// to be used internally
 	pub(crate) user: User,
 }
@@ -57,8 +57,8 @@ pub(crate) fn signup_as_god(pass: &str) -> Result<Signup, Error> {
 	signup_with_params(pass, identity, None, fs, vec![root])
 }
 
-pub(crate) fn signup_as_admin(pass: &str, welcome: &[u8], pin: &str) -> Result<Signup, Error> {
-	let welcome: Welcome = serde_json::from_slice(welcome).map_err(|_| Error::BadJson)?;
+pub(crate) fn signup_as_admin(pass: &str, welcome: &str, pin: &str) -> Result<Signup, Error> {
+	let welcome: Welcome = serde_json::from_str(welcome).map_err(|_| Error::BadJson)?;
 	let bundle = password_lock::unlock(&welcome.imports, pin).map_err(|_| Error::WrongPass)?;
 	let bundle: Bundle = serde_json::from_slice(&bundle).map_err(|_| Error::BadJson)?;
 	let import = Import {
@@ -118,7 +118,7 @@ fn signup_with_params(
 	};
 
 	Ok(Signup {
-		locked_user: serde_json::to_vec(&locked_user).unwrap(),
+		locked_user: serde_json::to_string(&locked_user).unwrap(),
 		user: User {
 			identity,
 			imports: imports.into_iter().map(|im| im.0).collect(),
@@ -197,8 +197,8 @@ mod tests {
 
 		let pin = "1234567890";
 		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
-		let invite: Invite = serde_json::from_slice(&invite).unwrap();
-		let locked_god: LockedUser = serde_json::from_slice(&locked_god).unwrap();
+		let invite: Invite = serde_json::from_str(&invite).unwrap();
+		let locked_god: LockedUser = serde_json::from_str(&locked_god).unwrap();
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -207,7 +207,7 @@ mod tests {
 			nodes: locked_god.roots.clone(),
 			sig: invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let admin_pass = "admin_pass";
 		let Signup {
 			locked_user: admin_json,
@@ -215,9 +215,9 @@ mod tests {
 		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
 		// pretend the backend returns all locked nodes for this user
-		let mut decoded: LockedUser = serde_json::from_slice(&admin_json).unwrap();
+		let mut decoded: LockedUser = serde_json::from_str(&admin_json).unwrap();
 		decoded.roots = locked_god.roots;
-		let reencoded = serde_json::to_vec(&decoded).unwrap();
+		let reencoded = serde_json::to_string(&decoded).unwrap();
 
 		let unlocked_admin = user::unlock_with_pass(admin_pass, &reencoded).unwrap();
 
@@ -234,8 +234,8 @@ mod tests {
 
 		let pin = "1234567890";
 		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
-		let invite: Invite = serde_json::from_slice(&invite).unwrap();
-		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
+		let invite: Invite = serde_json::from_str(&invite).unwrap();
+		let locked_user: LockedUser = serde_json::from_str(&locked_user).unwrap();
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -243,7 +243,7 @@ mod tests {
 			nodes: locked_user.roots,
 			sig: invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let admin_pass = "admin_pass";
 		let Signup {
 			locked_user,
@@ -253,8 +253,8 @@ mod tests {
 		let new_pin = "555";
 		let new_pass = "new_admin_pass";
 		let new_invite = admin.export_all_seeds_to_email(new_pin, "bob.mail.com");
-		let new_invite: Invite = serde_json::from_slice(&new_invite).unwrap();
-		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
+		let new_invite: Invite = serde_json::from_str(&new_invite).unwrap();
+		let locked_user: LockedUser = serde_json::from_str(&locked_user).unwrap();
 		let welcome = Welcome {
 			user_id: new_invite.user_id,
 			sender: new_invite.sender,
@@ -262,7 +262,7 @@ mod tests {
 			nodes: locked_user.roots,
 			sig: new_invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let Signup {
 			locked_user: new_admin_json,
 			user: new_admin,

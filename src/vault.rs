@@ -84,8 +84,8 @@ pub(crate) struct NewNodeReq {
 }
 
 impl LockedContent {
-	fn try_from_encrypted(json: &[u8], aes: Aes, id: u64, parent_id: u64) -> Result<Self, Error> {
-		let pt = aes.decrypt(json).map_err(|_| Error::BadOperation)?;
+	fn try_from_encrypted(ct: &[u8], aes: Aes, id: u64, parent_id: u64) -> Result<Self, Error> {
+		let pt = aes.decrypt(ct).map_err(|_| Error::BadOperation)?;
 		let content: LockedContent =
 			serde_json::from_slice(&pt).map_err(|_| Error::BadOperation)?;
 
@@ -733,6 +733,7 @@ impl FileSystem {
 	}
 
 	// touch and immediately apply its transaction
+	// TODO: the backend should create a PendingUpload(id); when uploaded /save/id should be called
 	pub fn touch_mut(
 		&mut self,
 		parent_id: u64,

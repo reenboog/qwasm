@@ -171,19 +171,15 @@ impl Network for JsNet {
 			// }
 			Error::NoNetwork
 		})?;
-		let uint8_array = Uint8Array::new(&result);
-		let byte_array = uint8_array.to_vec();
-		let nodes: Vec<LockedNode> =
-			serde_json::from_slice(&byte_array).map_err(|_| Error::BadJson)?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let nodes: Vec<LockedNode> = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
 
 		Ok(nodes)
 	}
 
 	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error> {
-		let serialized = serde_json::to_vec(nodes).unwrap();
-		let uint8_array = Uint8Array::new_with_length(serialized.len() as u32);
-		uint8_array.copy_from(&serialized.as_slice());
-		let json = JsValue::from(uint8_array);
+		let serialized = serde_json::to_string(nodes).unwrap();
+		let json = JsValue::from(serialized);
 		let this = JsValue::NULL;
 		let promise = self
 			.upload_nodes
@@ -251,13 +247,13 @@ impl TryFrom<Node> for DirView {
 
 #[wasm_bindgen]
 pub struct Registered {
-	locked_user: Vec<u8>,
+	locked_user: String,
 	protocol: Protocol,
 }
 
 #[wasm_bindgen]
 impl Registered {
-	pub fn json(&self) -> Vec<u8> {
+	pub fn json(&self) -> String {
 		self.locked_user.clone()
 	}
 
@@ -278,7 +274,7 @@ impl Protocol {
 	#[cfg(not(target_arch = "wasm32"))]
 	pub(crate) fn register_as_admin<T>(
 		pass: &str,
-		welcome: &[u8],
+		welcome: &str,
 		pin: &str,
 		net: T,
 	) -> Result<Registered, Error>
@@ -289,7 +285,7 @@ impl Protocol {
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
-	fn unlock_with_pass<T>(pass: &str, locked_user: &[u8], net: T) -> Result<Protocol, Error>
+	fn unlock_with_pass<T>(pass: &str, locked_user: &str, net: T) -> Result<Protocol, Error>
 	where
 		T: Network + 'static,
 	{
@@ -313,7 +309,7 @@ impl Protocol {
 
 	fn register_as_admin_impl(
 		pass: &str,
-		welcome: &[u8],
+		welcome: &str,
 		pin: &str,
 		net: Box<dyn Network>,
 	) -> Result<Registered, Error> {
@@ -339,7 +335,7 @@ impl Protocol {
 
 	fn unlock_with_pass_impl(
 		pass: &str,
-		locked_user: &[u8],
+		locked_user: &str,
 		net: Box<dyn Network>,
 	) -> Result<Protocol, Error> {
 		let user = user::unlock_with_pass(pass, locked_user).map_err(|e| match e {
@@ -366,7 +362,7 @@ impl Protocol {
 	#[cfg(target_arch = "wasm32")]
 	pub fn register_as_admin(
 		pass: &str,
-		welcome: &[u8],
+		welcome: &str,
 		pin: &str,
 		net: JsNet,
 	) -> Result<Registered, Error> {
@@ -374,7 +370,7 @@ impl Protocol {
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	pub fn unlock_with_pass(pass: &str, locked_user: &[u8], net: JsNet) -> Result<Protocol, Error> {
+	pub fn unlock_with_pass(pass: &str, locked_user: &str, net: JsNet) -> Result<Protocol, Error> {
 		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net))
 	}
 
@@ -577,15 +573,13 @@ impl Protocol {
 		}
 	}
 
-	pub fn encrypt_announcement(&self, msg: &str) -> Result<Uint8Array, Error> {
+	pub fn encrypt_announcement(&self, msg: &str) -> Result<String, Error> {
 		self.user
 			.encrypt_announcement(msg)
-			.map_or(Err(Error::NoAccess), |ct| {
-				Ok(Uint8Array::from(ct.as_slice()))
-			})
+			.map_err(|_| Error::NoAccess)
 	}
 
-	pub fn decrypt_announcement(&self, ct: &[u8]) -> Result<String, Error> {
+	pub fn decrypt_announcement(&self, ct: &str) -> Result<String, Error> {
 		self.user
 			.decrypt_announcement(ct)
 			.map_err(|_| Error::NoAccess)

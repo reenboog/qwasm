@@ -183,7 +183,7 @@ impl User {
 		fs_ids: Option<&[u64]>,
 		db_ids: Option<&[database::Index]>,
 		email: &str,
-	) -> Vec<u8> {
+	) -> String {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);
 		let payload = password_lock::lock(&bundle, pin).unwrap();
 
@@ -202,7 +202,7 @@ impl User {
 			sig,
 		};
 
-		let serialized = serde_json::to_vec(&invite).unwrap();
+		let serialized = serde_json::to_string(&invite).unwrap();
 
 		serialized
 	}
@@ -210,24 +210,24 @@ impl User {
 
 impl User {
 	// may fail, if not enough acces
-	fn encrypt_db_entry(&self, table: &str, pt: &[u8], column: &str) -> Result<Vec<u8>, Error> {
+	fn encrypt_db_entry(&self, table: &str, pt: &[u8], column: &str) -> Result<String, Error> {
 		let salt = Salt::generate();
 		let aes = self.aes_for_entry_in_table(table, column, salt.clone())?;
 		let ct = aes.encrypt(pt);
 		let encrypted = encrypted::Encrypted { ct, salt };
 
-		Ok(serde_json::to_vec(&encrypted).unwrap())
+		Ok(serde_json::to_string(&encrypted).unwrap())
 	}
 
 	// may fail, if not enough access
 	fn decrypt_db_entry(
 		&self,
 		table: &str,
-		encrypted: &[u8],
+		encrypted: &str,
 		column: &str,
 	) -> Result<Vec<u8>, Error> {
 		let encrypted: encrypted::Encrypted =
-			serde_json::from_slice(encrypted).map_err(|_| Error::BadJson)?;
+			serde_json::from_str(encrypted).map_err(|_| Error::BadJson)?;
 		let aes = self.aes_for_entry_in_table(table, column, encrypted.salt)?;
 
 		aes.decrypt(&encrypted.ct).map_err(|_| Error::BadKey)
@@ -294,25 +294,25 @@ impl User {
 
 	// export all *available* seeds; returns json-serialized Invite
 	// used when creating new admins
-	pub fn export_all_seeds_to_email(&mut self, pin: &str, email: &str) -> Vec<u8> {
+	pub fn export_all_seeds_to_email(&mut self, pin: &str, email: &str) -> String {
 		self.share_seeds_to_email(pin, None, None, email)
 	}
 
 	// FIXME: sign as well
 	//
-	pub fn encrypt_announcement(&self, msg: &str) -> Result<Vec<u8>, Error> {
+	pub fn encrypt_announcement(&self, msg: &str) -> Result<String, Error> {
 		self.encrypt_db_entry("messages", msg.as_bytes(), "text")
 	}
 
-	pub fn decrypt_announcement(&self, encrypted: &[u8]) -> Result<String, Error> {
+	pub fn decrypt_announcement(&self, encrypted: &str) -> Result<String, Error> {
 		let pt = self.decrypt_db_entry("messages", encrypted, "text")?;
 
 		String::from_utf8(pt).map_err(|_| Error::CorruptData)
 	}
 }
 
-pub fn unlock_with_pass(pass: &str, locked: &[u8]) -> Result<User, Error> {
-	let locked: LockedUser = serde_json::from_slice(locked).map_err(|_| Error::BadJson)?;
+pub fn unlock_with_pass(pass: &str, locked: &str) -> Result<User, Error> {
+	let locked: LockedUser = serde_json::from_str(locked).map_err(|_| Error::BadJson)?;
 	let decrypted_priv =
 		password_lock::unlock(&locked.encrypted_priv, pass).map_err(|_| Error::WrongPass)?;
 
@@ -419,11 +419,11 @@ mod tests {
 			locked_user,
 			user: mut god,
 		} = signup_as_god(&god_pass).unwrap();
-		let locked_user: LockedUser = serde_json::from_slice(&locked_user).unwrap();
+		let locked_user: LockedUser = serde_json::from_str(&locked_user).unwrap();
 
 		let pin = "1234567890";
 		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
-		let invite: Invite = serde_json::from_slice(&invite).unwrap();
+		let invite: Invite = serde_json::from_str(&invite).unwrap();
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -431,7 +431,7 @@ mod tests {
 			nodes: locked_user.roots.clone(),
 			sig: invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let admin_pass = "admin_pass";
 		let Signup {
 			locked_user: admin_json,
@@ -439,9 +439,9 @@ mod tests {
 		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
 		// pretend the backend returns all locked nodes for this user
-		let mut decoded: LockedUser = serde_json::from_slice(&admin_json).unwrap();
+		let mut decoded: LockedUser = serde_json::from_str(&admin_json).unwrap();
 		decoded.roots = locked_user.roots;
-		let reencoded = serde_json::to_vec(&decoded).unwrap();
+		let reencoded = serde_json::to_string(&decoded).unwrap();
 
 		let unlocked_admin = unlock_with_pass(admin_pass, &reencoded).unwrap();
 
@@ -471,8 +471,8 @@ mod tests {
 		let pin = "1234567890";
 		// share all root seeds
 		let invite = god.export_all_seeds_to_email(pin, "adaml@mail.com");
-		let invite: Invite = serde_json::from_slice(&invite).unwrap();
-		let roots = serde_json::from_slice::<LockedUser>(&locked_god)
+		let invite: Invite = serde_json::from_str(&invite).unwrap();
+		let roots = serde_json::from_str::<LockedUser>(&locked_god)
 			.unwrap()
 			.roots;
 		let welcome = Welcome {
@@ -482,7 +482,7 @@ mod tests {
 			nodes: roots.clone(),
 			sig: invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let adam_pass = "adam_pass";
 		let Signup {
 			locked_user: _,
@@ -529,7 +529,7 @@ mod tests {
 			]),
 			"eve@mail.com",
 		);
-		let eve_invite: Invite = serde_json::from_slice(&eve_invite).unwrap();
+		let eve_invite: Invite = serde_json::from_str(&eve_invite).unwrap();
 		let welcome = Welcome {
 			user_id: eve_invite.user_id,
 			sender: eve_invite.sender,
@@ -537,7 +537,7 @@ mod tests {
 			nodes: roots.clone(),
 			sig: eve_invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let Signup {
 			locked_user: _,
 			user: mut eve,
@@ -566,8 +566,7 @@ mod tests {
 		let abel_pin = "777";
 		let abel_pass = "abel_pass";
 		let abel_invite = eve.export_all_seeds_to_email(&abel_pin, "abel@mail.com");
-		let abel_invite: Invite = serde_json::from_slice(&abel_invite).unwrap();
-		// let locked_abel: LockedUser = serde_json::from_slice(&locked_eve).unwrap();
+		let abel_invite: Invite = serde_json::from_str(&abel_invite).unwrap();
 		let welcome = Welcome {
 			user_id: abel_invite.user_id,
 			sender: abel_invite.sender,
@@ -575,7 +574,7 @@ mod tests {
 			nodes: roots.clone(),
 			sig: abel_invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let Signup {
 			locked_user: _,
 			user: mut eve,
@@ -624,7 +623,7 @@ mod tests {
 			]),
 			"eve@mail.com",
 		);
-		let cain_invite: Invite = serde_json::from_slice(&cain_invite).unwrap();
+		let cain_invite: Invite = serde_json::from_str(&cain_invite).unwrap();
 		let welcome = Welcome {
 			user_id: cain_invite.user_id,
 			sender: cain_invite.sender,
@@ -632,7 +631,7 @@ mod tests {
 			nodes: roots,
 			sig: cain_invite.sig,
 		};
-		let welcome = serde_json::to_vec(&welcome).unwrap();
+		let welcome = serde_json::to_string(&welcome).unwrap();
 		let Signup {
 			locked_user: _,
 			user: cain,
