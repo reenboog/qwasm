@@ -1,6 +1,6 @@
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use js_sys::{Array, Promise, Uint8Array};
+use js_sys::{Promise, Uint8Array};
 use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
@@ -583,6 +583,10 @@ impl Protocol {
 		self.user
 			.decrypt_announcement(ct)
 			.map_err(|_| Error::NoAccess)
+	}
+
+	pub fn export_all_seeds_to_email(&mut self, pin: &str, email: &str) -> String {
+		self.user.export_all_seeds_to_email(pin, email)
 	}
 
 	// TODO: encrypt/decrypt announcement
