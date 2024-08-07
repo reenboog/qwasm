@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::hkdf;
 
-const KEY_SIZE: usize = 32;
-const IV_SIZE: usize = 12;
+pub const KEY_SIZE: usize = 32;
+pub const IV_SIZE: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Key {

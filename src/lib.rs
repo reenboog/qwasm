@@ -21,3 +21,4 @@ mod key_pair;
 mod private_key;
 mod public_key;
 mod salt;
+mod session;

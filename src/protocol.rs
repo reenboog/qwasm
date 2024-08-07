@@ -3,40 +3,53 @@ use async_trait::async_trait;
 use js_sys::{Promise, Uint8Array};
 use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use wasm_bindgen_futures::JsFuture;
+use web_sys::window;
 
 use crate::{
-	register::Signup,
-	seeds::ROOT_ID,
+	aes_gcm, encrypted, password_lock,
+	register::{LockedUser, Signup},
+	seeds::{Seed, ROOT_ID},
+	session,
 	user::{self, User},
 	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
 };
 
+const ID_ENVELOPE: &str = "senvelope";
+const ID_USERID: &str = "suserid";
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Error {
 	NotFound,
-	NoNetwork,
+	NoNetwork(JsValue),
 	NoAccess,
+	NoStorage,
 	BadOperation,
 	BadJson,
 	WrongPass,
 	JsViolated,
 	ForgedSig,
+	NoSession,
 }
 
 impl From<Error> for JsValue {
 	fn from(value: Error) -> Self {
+		use std::borrow::Cow;
 		use Error::*;
 
-		JsValue::from_str(match value {
-			NotFound => "NotFound",
-			NoNetwork => "NoNetwork",
-			BadJson => "BadJson",
-			WrongPass => "WrongPass",
-			BadOperation => "BadOperation",
-			JsViolated => "JsViolated",
-			ForgedSig => "ForgedSig",
-			NoAccess => "NoAccess",
-		})
+		let msg: Cow<'static, str> = match value {
+			NotFound => "NotFound".into(),
+			NoNetwork(e) => format!("NoNetwork: {:?}", e).into(),
+			BadJson => "BadJson".into(),
+			WrongPass => "WrongPass".into(),
+			BadOperation => "BadOperation".into(),
+			JsViolated => "JsViolated".into(),
+			ForgedSig => "ForgedSig".into(),
+			NoAccess => "NoAccess".into(),
+			NoStorage => "NoStorage".into(),
+			NoSession => "NoSession".into(),
+		};
+
+		JsValue::from_str(&msg)
 	}
 }
 
@@ -111,6 +124,49 @@ pub(crate) trait Network {
 	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error>;
 	// the backend may mark these uploads as pending at first and as complete when all data has been transmitted
 	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error>;
+	async fn get_user(&self, id: u64) -> Result<LockedUser, Error>;
+	async fn get_master_key(&self, user_id: u64) -> Result<encrypted::Encrypted, Error>;
+	async fn lock_session(&self, token_id: &str, token: &Seed) -> Result<(), Error>;
+	async fn unlock_session(&self, token_id: &str) -> Result<Seed, Error>;
+}
+
+struct Storage {}
+
+impl Storage {
+	async fn set_item(&self, key: &str, value: &str) -> Result<(), Error> {
+		let window = window().ok_or(Error::NoStorage)?;
+		let storage = window
+			.local_storage()
+			.map_err(|_| Error::NoStorage)?
+			.unwrap();
+
+		// Set a value in local storage
+		storage.set_item(key, value).map_err(|_| Error::NoStorage)?;
+
+		Ok(())
+	}
+
+	async fn get_item(&self, key: &str) -> Result<Option<String>, Error> {
+		let window = window().ok_or(Error::NoStorage)?;
+		let storage = window
+			.local_storage()
+			.map_err(|_| Error::NoStorage)?
+			.unwrap();
+
+		let item = storage.get_item(key).map_err(|_| Error::NoStorage)?;
+
+		Ok(item)
+	}
+
+	async fn remove_item(&self, key: &str) -> Result<(), Error> {
+		let window = window().ok_or(Error::NoStorage)?;
+		let storage = window
+			.local_storage()
+			.map_err(|_| Error::NoStorage)?
+			.unwrap();
+
+		Ok(storage.remove_item(key).map_err(|_| Error::NoStorage)?)
+	}
 }
 
 #[async_trait]
@@ -131,46 +187,55 @@ pub(crate) trait Cache {
 pub struct JsNet {
 	pub(crate) fetch_subtree: js_sys::Function,
 	pub(crate) upload_nodes: js_sys::Function,
-	// upload user
-	// fetch user
-	// fetch session lock
-	// upload session lock
+	pub(crate) get_mk: js_sys::Function,
+	pub(crate) lock_session: js_sys::Function,
+	pub(crate) unlock_session: js_sys::Function,
+	pub(crate) get_user: js_sys::Function,
 }
 
 #[wasm_bindgen]
 impl JsNet {
 	#[wasm_bindgen(constructor)]
-	pub fn new(fetch_subtree: js_sys::Function, upload_nodes: js_sys::Function) -> Self {
+	pub fn new(
+		fetch_subtree: js_sys::Function,
+		upload_nodes: js_sys::Function,
+		get_mk: js_sys::Function,
+		get_user: js_sys::Function,
+		lock_session: js_sys::Function,
+		unlock_session: js_sys::Function,
+	) -> Self {
 		Self {
 			fetch_subtree,
 			upload_nodes,
+			get_mk,
+			get_user,
+			lock_session,
+			unlock_session,
 		}
 	}
 }
 
 #[async_trait(?Send)]
 impl Network for JsNet {
+	// FIXME: parse errors properly
+	// TODO: handle http response
+	// if let Some(error_str) = err.as_string() {
+	// 	match from_str::<ErrorCode>(&error_str) {
+	// 		Ok(err_code) => FetchError::ApiErr(err_code),
+	// 		Err(_) => FetchError::NoNetwork,
+	// 	}
+	// } else {
+	// 	FetchError::NoNetwork
+	// }
 	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error> {
 		let this = JsValue::NULL;
-		let id = JsValue::from_f64(id as f64);
+		let id = JsValue::from(id.to_string());
 		let promise = self
 			.fetch_subtree
 			.call1(&this, &id)
 			.map_err(|_| Error::JsViolated)?;
-		// TODO: handle http response
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
-		// TODO: properly parse errors
-		let result = js_future.await.map_err(|err| {
-			// if let Some(error_str) = err.as_string() {
-			// 	match from_str::<ErrorCode>(&error_str) {
-			// 		Ok(err_code) => FetchError::ApiErr(err_code),
-			// 		Err(_) => FetchError::NoNetwork,
-			// 	}
-			// } else {
-			// 	FetchError::NoNetwork
-			// }
-			Error::NoNetwork
-		})?;
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
 		let json: String = result.as_string().ok_or(Error::BadJson)?;
 		let nodes: Vec<LockedNode> = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
 
@@ -186,10 +251,70 @@ impl Network for JsNet {
 			.call1(&this, &json)
 			.map_err(|_| Error::JsViolated)?;
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
-		// TODO: handle http response
-		js_future.await.map_err(|_| Error::NoNetwork)?;
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
 
 		Ok(())
+	}
+
+	async fn get_master_key(&self, user_id: u64) -> Result<encrypted::Encrypted, Error> {
+		let this = JsValue::NULL;
+		let user_id = JsValue::from(user_id.to_string());
+		let promise = self
+			.get_mk
+			.call1(&this, &user_id)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let mk: encrypted::Encrypted = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(mk)
+	}
+
+	async fn get_user(&self, id: u64) -> Result<LockedUser, Error> {
+		let this = JsValue::NULL;
+		let user_id = JsValue::from(id.to_string());
+		let promise = self
+			.get_user
+			.call1(&this, &user_id)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let user: LockedUser = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(user)
+	}
+
+	// TODO: probably pass user_id as well
+	async fn lock_session(&self, token_id: &str, token: &Seed) -> Result<(), Error> {
+		let this = JsValue::NULL;
+		let token_id = JsValue::from(token_id);
+		let token = JsValue::from(serde_json::to_string(&token).unwrap());
+		let promise = self
+			.lock_session
+			.call2(&this, &token_id, &token)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
+
+		Ok(())
+	}
+
+	async fn unlock_session(&self, token_id: &str) -> Result<Seed, Error> {
+		let this = JsValue::NULL;
+		let token_id = JsValue::from(token_id);
+		let promise = self
+			.unlock_session
+			.call1(&this, &token_id)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let token: Seed = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(token)
 	}
 }
 
@@ -201,6 +326,7 @@ pub struct Protocol {
 
 	// callbacks
 	net: Box<dyn Network>,
+	storage: Storage,
 	// keep the caches and all that here?
 }
 
@@ -249,6 +375,7 @@ impl TryFrom<Node> for DirView {
 pub struct Registered {
 	locked_user: String,
 	protocol: Protocol,
+	// envelope + token_id?
 }
 
 #[wasm_bindgen]
@@ -292,6 +419,52 @@ impl Protocol {
 		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net))
 	}
 
+	#[cfg(not(target_arch = "wasm32"))]
+	async fn unlock_session_if_any<T>(net: T) -> Result<Protocol, Error>
+	where
+		T: Network + 'static,
+	{
+		Self::unlock_session_if_any_impl(Box::new(net)).await
+	}
+
+	async fn unlock_session_if_any_impl(net: Box<dyn Network>) -> Result<Protocol, Error> {
+		let storage = Storage {};
+
+		if let Some(envelope) = storage
+			.get_item(ID_ENVELOPE)
+			.await
+			.map_err(|_| Error::NoSession)?
+		{
+			let envelope: session::Envelope =
+				serde_json::from_str(&envelope).map_err(|_| Error::NoSession)?;
+			if let Some(user_id) = storage
+				.get_item(ID_USERID)
+				.await
+				.map_err(|_| Error::NoSession)?
+			{
+				let user_id: u64 = serde_json::from_str(&user_id).map_err(|_| Error::NoSession)?;
+				let token = net.unlock_session(&envelope.token_id).await?;
+				let user = net.get_user(user_id).await?;
+				let mk =
+					session::unlock(envelope.encrypted_mk, token).map_err(|_| Error::NoSession)?;
+				let user = user::unlock_with_master_key(user, &mk).map_err(|_| Error::NoSession)?;
+
+				let protocol = Protocol {
+					cd: None,
+					user,
+					net,
+					storage,
+				};
+
+				protocol.lock_session_with_master_key(mk).await?;
+
+				return Ok(protocol);
+			}
+		}
+
+		return Err(Error::NoSession);
+	}
+
 	fn register_as_god_impl(pass: &str, net: Box<dyn Network>) -> Result<Registered, Error> {
 		use crate::register::signup_as_god;
 
@@ -303,6 +476,7 @@ impl Protocol {
 				cd: None,
 				user,
 				net,
+				storage: Storage {},
 			},
 		})
 	}
@@ -329,6 +503,7 @@ impl Protocol {
 				cd: None,
 				user,
 				net,
+				storage: Storage {},
 			},
 		})
 	}
@@ -348,6 +523,7 @@ impl Protocol {
 			cd: None,
 			user,
 			net,
+			storage: Storage {},
 		})
 	}
 }
@@ -372,6 +548,34 @@ impl Protocol {
 	#[cfg(target_arch = "wasm32")]
 	pub fn unlock_with_pass(pass: &str, locked_user: &str, net: JsNet) -> Result<Protocol, Error> {
 		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net))
+	}
+
+	#[cfg(target_arch = "wasm32")]
+	pub async fn unlock_session_if_any(net: JsNet) -> Result<Protocol, Error> {
+		Self::unlock_session_if_any_impl(Box::new(net)).await
+	}
+
+	pub async fn lock_session(&self, pass: &str) -> Result<(), Error> {
+		let mk = self.net.get_master_key(self.user.identity.id()).await?;
+		let mk = password_lock::decrypt_master_key(&mk, pass).map_err(|_| Error::WrongPass)?;
+
+		self.lock_session_with_master_key(mk).await
+	}
+
+	async fn lock_session_with_master_key(&self, mk: aes_gcm::Aes) -> Result<(), Error> {
+		let to_lock = session::lock(&mk);
+
+		self.net
+			.lock_session(&to_lock.locked.token_id, &to_lock.token)
+			.await?;
+
+		let envelope = serde_json::to_string(&to_lock.locked).unwrap();
+		let user_id = serde_json::to_string(&self.user.identity.id()).unwrap();
+
+		self.storage.set_item(ID_ENVELOPE, &envelope).await.unwrap();
+		self.storage.set_item(ID_USERID, &user_id).await.unwrap();
+
+		Ok(())
 	}
 
 	pub async fn ls_cur_mut(&mut self) -> Result<DirView, Error> {

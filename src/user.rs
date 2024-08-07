@@ -311,10 +311,9 @@ impl User {
 	}
 }
 
-pub fn unlock_with_pass(pass: &str, locked: &str) -> Result<User, Error> {
-	let locked: LockedUser = serde_json::from_str(locked).map_err(|_| Error::BadJson)?;
-	let decrypted_priv =
-		password_lock::unlock(&locked.encrypted_priv, pass).map_err(|_| Error::WrongPass)?;
+pub fn unlock_with_master_key(locked: LockedUser, mk: &aes_gcm::Aes) -> Result<User, Error> {
+	let decrypted_priv = password_lock::unlock_with_master_key(mk, &locked.encrypted_priv.ct)
+		.map_err(|_| Error::BadKey)?;
 
 	let _priv: identity::Private =
 		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;
@@ -399,6 +398,14 @@ pub fn unlock_with_pass(pass: &str, locked: &str) -> Result<User, Error> {
 		exports,
 		fs,
 	})
+}
+
+pub fn unlock_with_pass(pass: &str, locked: &str) -> Result<User, Error> {
+	let locked: LockedUser = serde_json::from_str(locked).map_err(|_| Error::BadJson)?;
+	let mk = password_lock::decrypt_master_key(&locked.encrypted_priv.master_key, pass)
+		.map_err(|_| Error::WrongPass)?;
+
+	unlock_with_master_key(locked, &mk)
 }
 
 #[cfg(test)]
