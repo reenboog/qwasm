@@ -578,6 +578,11 @@ impl Protocol {
 		Ok(())
 	}
 
+	pub async fn logout(self) {
+		_ = self.storage.remove_item(ID_ENVELOPE).await;
+		_ = self.storage.remove_item(ID_USERID).await;
+	}
+
 	pub async fn ls_cur_mut(&mut self) -> Result<DirView, Error> {
 		self.ls_cur_mut_impl().await
 	}
