@@ -172,6 +172,8 @@ impl Network for JsNet {
 
 	async fn get_invite(&self, email: &str) -> Result<Welcome, Error> {
 		let this = JsValue::NULL;
+		// base64 is used to avoid invalid paths, eg GET /invite/alex@mode.io
+		let email = base64::encode_config(email, base64::URL_SAFE);
 		let email = JsValue::from(email);
 		let promise = self
 			.get_invite
