@@ -12,6 +12,7 @@ use crate::{
 	session,
 	user::{self, User},
 	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
+	webauthn,
 };
 
 const ID_ENVELOPE: &str = "senvelope";
@@ -128,6 +129,21 @@ pub(crate) trait Network {
 	async fn get_master_key(&self, user_id: u64) -> Result<encrypted::Encrypted, Error>;
 	async fn lock_session(&self, token_id: &str, token: &Seed) -> Result<(), Error>;
 	async fn unlock_session(&self, token_id: &str) -> Result<Seed, Error>;
+	async fn start_passkey_registration(
+		&self,
+		user_id: u64,
+	) -> Result<webauthn::Registration, Error>;
+	async fn finish_passkey_registration(
+		&self,
+		user_id: u64,
+		cred: &webauthn::Credential,
+	) -> Result<(), Error>;
+	async fn start_passkey_auth(&self) -> Result<webauthn::AuthChallenge, Error>;
+	async fn finish_passkey_auth(
+		&self,
+		auth_id: u64,
+		auth: webauthn::Authentication,
+	) -> Result<webauthn::Passkey, Error>;
 }
 
 struct Storage {}
@@ -191,6 +207,10 @@ pub struct JsNet {
 	pub(crate) lock_session: js_sys::Function,
 	pub(crate) unlock_session: js_sys::Function,
 	pub(crate) get_user: js_sys::Function,
+	pub(crate) start_passkey_registration: js_sys::Function,
+	pub(crate) finish_passkey_registration: js_sys::Function,
+	pub(crate) start_passkey_auth: js_sys::Function,
+	pub(crate) finish_passkey_auth: js_sys::Function,
 }
 
 #[wasm_bindgen]
@@ -203,6 +223,10 @@ impl JsNet {
 		get_user: js_sys::Function,
 		lock_session: js_sys::Function,
 		unlock_session: js_sys::Function,
+		start_passkey_registration: js_sys::Function,
+		finish_passkey_registration: js_sys::Function,
+		start_passkey_auth: js_sys::Function,
+		finish_passkey_auth: js_sys::Function,
 	) -> Self {
 		Self {
 			fetch_subtree,
@@ -211,6 +235,10 @@ impl JsNet {
 			get_user,
 			lock_session,
 			unlock_session,
+			start_passkey_registration,
+			finish_passkey_registration,
+			start_passkey_auth,
+			finish_passkey_auth,
 		}
 	}
 }
@@ -315,6 +343,79 @@ impl Network for JsNet {
 		let token: Seed = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
 
 		Ok(token)
+	}
+
+	async fn start_passkey_registration(
+		&self,
+		user_id: u64,
+	) -> Result<webauthn::Registration, Error> {
+		let this = JsValue::NULL;
+		let user_id = JsValue::from(user_id.to_string());
+		let promise = self
+			.start_passkey_registration
+			.call1(&this, &user_id)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let reg: webauthn::Registration =
+			serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(reg)
+	}
+
+	async fn finish_passkey_registration(
+		&self,
+		user_id: u64,
+		cred: &webauthn::Credential,
+	) -> Result<(), Error> {
+		let this = JsValue::NULL;
+		let user_id = JsValue::from(user_id.to_string());
+		let cred = JsValue::from(serde_json::to_string(&cred).unwrap());
+		let promise = self
+			.finish_passkey_registration
+			.call2(&this, &user_id, &cred)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
+
+		Ok(())
+	}
+
+	async fn start_passkey_auth(&self) -> Result<webauthn::AuthChallenge, Error> {
+		let this = JsValue::NULL;
+		let promise = self
+			.start_passkey_auth
+			.call0(&this)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let auth: webauthn::AuthChallenge =
+			serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(auth)
+	}
+
+	async fn finish_passkey_auth(
+		&self,
+		auth_id: u64,
+		auth: webauthn::Authentication,
+	) -> Result<webauthn::Passkey, Error> {
+		let this = JsValue::NULL;
+		let auth_id = JsValue::from(auth_id.to_string());
+		let auth = JsValue::from(serde_json::to_string(&auth).unwrap());
+		let promise = self
+			.finish_passkey_auth
+			.call2(&this, &auth_id, &auth)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let passkey: webauthn::Passkey = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(passkey)
 	}
 }
 
@@ -576,6 +677,68 @@ impl Protocol {
 		self.storage.set_item(ID_USERID, &user_id).await.unwrap();
 
 		Ok(())
+	}
+
+	pub async fn register_passkey(
+		&self,
+		key_name: &str,
+		pass: &str,
+		name: &str,
+		rp_name: &str,
+		rp_id: &str,
+	) -> Result<String, Error> {
+		let user_id = self.user.identity.id();
+		let reg = self.net.start_passkey_registration(user_id).await?;
+		let cred = webauthn::register_passkey(
+			rp_name,
+			rp_id,
+			name,
+			name,
+			&user_id.to_be_bytes(), // FIXME: pass as is and convert inside the function
+			&reg,
+		)
+		.await
+		.map_err(|_| Error::JsViolated)?;
+
+		self.net.finish_passkey_registration(user_id, &cred).await?;
+
+		let prf_output = webauthn::derive_prf_output(&reg.challenge, &cred.id, &reg.prf_salt)
+			.await
+			.map_err(|_| Error::JsViolated)?;
+
+		// TODO: authenticate to get prf output
+		// TODO: encrypt mk and send to BE
+		// associate key_name with a credential_id
+		// let mk = self.net.get_master_key(user_id).await?;
+		// encrypt this with a prf output
+		// let mk = password_lock::decrypt_master_key(&mk, pass).map_err(|_| Error::WrongPass)?;
+
+		Ok(serde_json::to_string(&prf_output).unwrap())
+	}
+
+	// FIXME: return a Protocol instance
+	// TODO: inject net: Box<dyn Network>
+	pub async fn auth_passkey(&self, rp_id: &str) -> Result<String, Error> {
+		let challenge = self.net.start_passkey_auth().await?;
+		let auth = webauthn::authenticate(rp_id, &challenge)
+			.await
+			.map_err(|_| Error::JsViolated)?;
+		let passkey = self.net.finish_passkey_auth(challenge.id, auth.0).await?;
+		let prf_output = if let Some(prf_output) = auth.1 {
+			prf_output
+		} else {
+			webauthn::derive_prf_output(&challenge.challenge, &passkey.id, &passkey.prf_salt)
+				.await
+				.map_err(|_| Error::JsViolated)?
+		};
+
+		// let mk = self.net.get_master_key(passkey.user_id).await?;
+		// TODO: decrypt mk
+		// let user = self.net.get_user(passkey.user_id).await?;
+		// TODO: unlock with mk
+		// TODO: return Protocol
+
+		Ok(serde_json::to_string(&prf_output).unwrap())
 	}
 
 	pub async fn logout(self) {

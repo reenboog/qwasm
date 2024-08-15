@@ -22,3 +22,4 @@ mod private_key;
 mod public_key;
 mod salt;
 mod session;
+mod webauthn;

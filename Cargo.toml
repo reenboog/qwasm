@@ -13,7 +13,32 @@ crate-type = ["cdylib"]
 wasm-bindgen = "0.2.92"
 wasm-bindgen-futures = "0.4.42"
 js-sys = { version = "0.3.55" }
-web-sys = { version = "0.3.69", features = ["Window", "Crypto", "SubtleCrypto", "CryptoKey", "Storage"] }
+web-sys = { version = "0.3.70", features = [
+	"Window",
+	"Crypto",
+	"SubtleCrypto",
+	"CryptoKey",
+	"Storage",
+	"Navigator",
+	"CredentialsContainer",
+	"CredentialCreationOptions",
+	"PublicKeyCredential", 
+	"PublicKeyCredentialCreationOptions", 
+	"PublicKeyCredentialRpEntity", 
+	"PublicKeyCredentialUserEntity", 
+	"AuthenticationExtensionsClientInputs", 
+	"AuthenticationExtensionsPrfValues", 
+	"AuthenticatorSelectionCriteria", 
+	"AuthenticatorAttachment", 
+	"UserVerificationRequirement", 
+	"AuthenticationExtensionsPrfInputs", 
+	"PublicKeyCredentialType", 
+	"PublicKeyCredentialParameters", 
+	"AuthenticatorResponse",
+	"PublicKeyCredentialRequestOptions",
+	"CredentialRequestOptions",
+	"PublicKeyCredentialDescriptor",
+	"AuthenticationExtensionsClientOutputs"]}
 
 # async
 async-trait = { version = "0.1" }
@@ -44,10 +69,10 @@ base64 = { version = "0.13" }
 hex = { version = "0.4" }
 
 [profile.release]
-opt-level = 'z'  # Optimize for size
-lto = true       # Enable link time optimizations
-panic = 'abort'  # Avoids embedding panic handling (reduce size)
-codegen-units = 1  # May improve optimizations but can slow down compilation
+opt-level = 'z'
+lto = true
+panic = 'abort'
+codegen-units = 1
 
 [dev-dependencies]
 tokio = { version = "1.28.2", features = ["full"] }
