@@ -28,8 +28,15 @@ pub enum Error {
 	BadJson,
 	WrongPass,
 	JsViolated,
+	NoWebauthnPrfSupport,
 	ForgedSig,
 	NoSession,
+}
+
+fn console_log(msg: &str) {
+	use web_sys::console;
+
+	console::log_1(&msg.into());
 }
 
 impl From<Error> for JsValue {
@@ -48,6 +55,7 @@ impl From<Error> for JsValue {
 			NoAccess => "NoAccess".into(),
 			NoStorage => "NoStorage".into(),
 			NoSession => "NoSession".into(),
+			NoWebauthnPrfSupport => "NoWebauthnPrfSupport".into(),
 		};
 
 		JsValue::from_str(&msg)
@@ -136,7 +144,7 @@ pub(crate) trait Network {
 	async fn finish_passkey_registration(
 		&self,
 		user_id: u64,
-		cred: &webauthn::Credential,
+		bundle: &webauthn::Bundle,
 	) -> Result<(), Error>;
 	async fn start_passkey_auth(&self) -> Result<webauthn::AuthChallenge, Error>;
 	async fn finish_passkey_auth(
@@ -185,19 +193,6 @@ impl Storage {
 	}
 }
 
-#[async_trait]
-pub(crate) trait Cache {
-	// load Bundle { token_id, salt, encrypted_payload }
-	// let token = api.get_token(token_id) // may return LockedUser as well
-	// let payload_key = kdf(token, salt)
-	// let key = edecrypt(encrypted_payload, payload_key)
-	// let encrypted_user = api.get_user(user_id)
-	// let user = decrypt(encrypted, key)
-	async fn get_session(&self) -> Result<Vec<u8>, Error>;
-
-	// keep generated thumbnails here
-	// keep downloaded (encrypted) files here
-}
 
 #[wasm_bindgen]
 pub struct JsNet {
@@ -367,14 +362,14 @@ impl Network for JsNet {
 	async fn finish_passkey_registration(
 		&self,
 		user_id: u64,
-		cred: &webauthn::Credential,
+		bundle: &webauthn::Bundle,
 	) -> Result<(), Error> {
 		let this = JsValue::NULL;
 		let user_id = JsValue::from(user_id.to_string());
-		let cred = JsValue::from(serde_json::to_string(&cred).unwrap());
+		let bundle = JsValue::from(serde_json::to_string(&bundle).unwrap());
 		let promise = self
 			.finish_passkey_registration
-			.call2(&this, &user_id, &cred)
+			.call2(&this, &user_id, &bundle)
 			.map_err(|_| Error::JsViolated)?;
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
 
@@ -492,32 +487,42 @@ impl Registered {
 
 impl Protocol {
 	#[cfg(not(target_arch = "wasm32"))]
-	pub(crate) fn register_as_god<T>(pass: &str, net: T) -> Result<Registered, Error>
-	where
-		T: Network + 'static,
-	{
-		Self::register_as_god_impl(pass, Box::new(net))
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	pub(crate) fn register_as_admin<T>(
+	pub(crate) async fn register_as_god<T>(
 		pass: &str,
-		welcome: &str,
-		pin: &str,
 		net: T,
+		remember_me: bool,
 	) -> Result<Registered, Error>
 	where
 		T: Network + 'static,
 	{
-		Self::register_as_admin_impl(pass, welcome, pin, Box::new(net))
+		Self::register_as_god_impl(pass, Box::new(net), remember_me).await
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
-	fn unlock_with_pass<T>(pass: &str, locked_user: &str, net: T) -> Result<Protocol, Error>
+	pub(crate) async fn register_as_admin<T>(
+		pass: &str,
+		welcome: &str,
+		pin: &str,
+		net: T,
+		remember_me: bool,
+	) -> Result<Registered, Error>
 	where
 		T: Network + 'static,
 	{
-		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net))
+		Self::register_as_admin_impl(pass, welcome, pin, Box::new(net), remember_me).await
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	async fn unlock_with_pass<T>(
+		pass: &str,
+		locked_user: &str,
+		net: T,
+		remember_me: bool,
+	) -> Result<Protocol, Error>
+	where
+		T: Network + 'static,
+	{
+		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net), remember_me).await
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
@@ -566,27 +571,38 @@ impl Protocol {
 		return Err(Error::NoSession);
 	}
 
-	fn register_as_god_impl(pass: &str, net: Box<dyn Network>) -> Result<Registered, Error> {
+	async fn register_as_god_impl(
+		pass: &str,
+		net: Box<dyn Network>,
+		remember_me: bool,
+	) -> Result<Registered, Error> {
 		use crate::register::signup_as_god;
 
 		let Signup { locked_user, user } = signup_as_god(pass).unwrap();
 
+		let protocol = Protocol {
+			cd: None,
+			user,
+			net,
+			storage: Storage {},
+		};
+
+		// if remember_me {
+		// 	protocol.lock_session(pass).await?;
+		// }
+
 		Ok(Registered {
 			locked_user: locked_user,
-			protocol: Protocol {
-				cd: None,
-				user,
-				net,
-				storage: Storage {},
-			},
+			protocol,
 		})
 	}
 
-	fn register_as_admin_impl(
+	async fn register_as_admin_impl(
 		pass: &str,
 		welcome: &str,
 		pin: &str,
 		net: Box<dyn Network>,
+		remember_me: bool,
 	) -> Result<Registered, Error> {
 		use crate::register::signup_as_admin;
 		use crate::register::{self};
@@ -598,21 +614,28 @@ impl Protocol {
 				register::Error::ForgedSig => Error::ForgedSig,
 			})?;
 
+		let protocol = Protocol {
+			cd: None,
+			user,
+			net,
+			storage: Storage {},
+		};
+
+		// if remember_me {
+		// 	protocol.lock_session(pass).await?;
+		// }
+		
 		Ok(Registered {
 			locked_user,
-			protocol: Protocol {
-				cd: None,
-				user,
-				net,
-				storage: Storage {},
-			},
+			protocol,
 		})
 	}
 
-	fn unlock_with_pass_impl(
+	async fn unlock_with_pass_impl(
 		pass: &str,
 		locked_user: &str,
 		net: Box<dyn Network>,
+		remember_me: bool,
 	) -> Result<Protocol, Error> {
 		let user = user::unlock_with_pass(pass, locked_user).map_err(|e| match e {
 			user::Error::BadJson => Error::BadJson,
@@ -620,35 +643,47 @@ impl Protocol {
 			_ => Error::BadOperation,
 		})?;
 
-		Ok(Protocol {
+		let protocol = Protocol {
 			cd: None,
 			user,
 			net,
 			storage: Storage {},
-		})
+		};
+
+		// if remember_me {
+		// 	protocol.lock_session(pass).await?;
+		// }
+
+		Ok(protocol)
 	}
 }
 
 #[wasm_bindgen]
 impl Protocol {
 	#[cfg(target_arch = "wasm32")]
-	pub fn register_as_god(pass: &str, net: JsNet) -> Result<Registered, Error> {
-		Self::register_as_god_impl(pass, Box::new(net))
+	pub async fn register_as_god(pass: &str, net: JsNet, remember_me: bool) -> Result<Registered, Error> {
+		Self::register_as_god_impl(pass, Box::new(net), remember_me).await
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	pub fn register_as_admin(
+	pub async fn register_as_admin(
 		pass: &str,
 		welcome: &str,
 		pin: &str,
 		net: JsNet,
+		remember_me: bool,
 	) -> Result<Registered, Error> {
-		Self::register_as_admin_impl(pass, welcome, pin, Box::new(net))
+		Self::register_as_admin_impl(pass, welcome, pin, Box::new(net), remember_me).await
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	pub fn unlock_with_pass(pass: &str, locked_user: &str, net: JsNet) -> Result<Protocol, Error> {
-		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net))
+	pub async fn unlock_with_pass(
+		pass: &str,
+		locked_user: &str,
+		net: JsNet,
+		remember_me: bool,
+	) -> Result<Protocol, Error> {
+		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net), remember_me).await
 	}
 
 	#[cfg(target_arch = "wasm32")]
@@ -656,7 +691,7 @@ impl Protocol {
 		Self::unlock_session_if_any_impl(Box::new(net)).await
 	}
 
-	pub async fn lock_session(&self, pass: &str) -> Result<(), Error> {
+	async fn lock_session(&self, pass: &str) -> Result<(), Error> {
 		let mk = self.net.get_master_key(self.user.identity.id()).await?;
 		let mk = password_lock::decrypt_master_key(&mk, pass).map_err(|_| Error::WrongPass)?;
 
@@ -679,6 +714,8 @@ impl Protocol {
 		Ok(())
 	}
 
+	#[cfg(target_arch = "wasm32")]
+	// FIXME: return Vec<PasskeyView>
 	pub async fn register_passkey(
 		&self,
 		key_name: &str,
@@ -686,7 +723,7 @@ impl Protocol {
 		name: &str,
 		rp_name: &str,
 		rp_id: &str,
-	) -> Result<String, Error> {
+	) -> Result<(), Error> {
 		let user_id = self.user.identity.id();
 		let reg = self.net.start_passkey_registration(user_id).await?;
 		let cred = webauthn::register_passkey(
@@ -694,37 +731,39 @@ impl Protocol {
 			rp_id,
 			name,
 			name,
-			&user_id.to_be_bytes(), // FIXME: pass as is and convert inside the function
+			&user_id.to_be_bytes(), // FIXME: when type is changed, use .as_bytes()
 			&reg,
 			key_name,
 		)
 		.await
 		.map_err(|_| Error::JsViolated)?;
 
-		self.net.finish_passkey_registration(user_id, &cred).await?;
-
 		let prf_output = webauthn::derive_prf_output(&reg.challenge, &cred.id, &reg.prf_salt)
 			.await
-			.map_err(|_| Error::JsViolated)?;
+			.map_err(|_| Error::NoWebauthnPrfSupport)?;
 
-		// TODO: authenticate to get prf output
-		// TODO: encrypt mk and send to BE
-		// associate key_name with a credential_id
-		// let mk = self.net.get_master_key(user_id).await?;
-		// encrypt this with a prf output
-		// let mk = password_lock::decrypt_master_key(&mk, pass).map_err(|_| Error::WrongPass)?;
+		let mk = self.net.get_master_key(user_id).await?;
+		let mk = password_lock::decrypt_master_key(&mk, pass).map_err(|_| Error::WrongPass)?;
+		let mk = webauthn::lock(&prf_output, &mk);
 
-		Ok(serde_json::to_string(&prf_output).unwrap())
+		self.net
+			.finish_passkey_registration(user_id, &webauthn::Bundle { cred, mk })
+			.await?;
+
+		Ok(())
 	}
 
-	// FIXME: return a Protocol instance
-	// TODO: inject net: Box<dyn Network>
-	pub async fn auth_passkey(&self, rp_id: &str) -> Result<String, Error> {
-		let challenge = self.net.start_passkey_auth().await?;
+	#[cfg(target_arch = "wasm32")]
+	pub async fn auth_passkey(
+		rp_id: &str,
+		net: JsNet,
+		remember_me: bool,
+	) -> Result<Protocol, Error> {
+		let challenge = net.start_passkey_auth().await?;
 		let auth = webauthn::authenticate(rp_id, &challenge)
 			.await
 			.map_err(|_| Error::JsViolated)?;
-		let passkey = self.net.finish_passkey_auth(challenge.id, auth.0).await?;
+		let passkey = net.finish_passkey_auth(challenge.id, auth.0).await?;
 		let prf_output = if let Some(prf_output) = auth.1 {
 			prf_output
 		} else {
@@ -732,14 +771,22 @@ impl Protocol {
 				.await
 				.map_err(|_| Error::JsViolated)?
 		};
+		let mk = webauthn::unlock(passkey.mk, &prf_output).map_err(|_| Error::NoAccess)?;
+		let user = net.get_user(passkey.user_id).await?;
+		let user = user::unlock_with_master_key(user, &mk).map_err(|_| Error::NoAccess)?;
+		let storage = Storage {};
+		let protocol = Protocol {
+			cd: None,
+			user,
+			net: Box::new(net),
+			storage,
+		};
 
-		// let mk = self.net.get_master_key(passkey.user_id).await?;
-		// TODO: decrypt mk
-		// let user = self.net.get_user(passkey.user_id).await?;
-		// TODO: unlock with mk
-		// TODO: return Protocol
+		// if remember_me {
+		// 	protocol.lock_session_with_master_key(mk).await?;
+		// }
 
-		Ok(serde_json::to_string(&prf_output).unwrap())
+		Ok(protocol)
 	}
 
 	pub async fn logout(self) {

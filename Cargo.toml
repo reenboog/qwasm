@@ -16,6 +16,7 @@ js-sys = { version = "0.3.55" }
 web-sys = { version = "0.3.70", features = [
 	"Window",
 	"Crypto",
+	"console",
 	"SubtleCrypto",
 	"CryptoKey",
 	"Storage",

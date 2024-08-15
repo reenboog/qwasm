@@ -1,13 +1,19 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+	aes_gcm,
 	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
+	encrypted, hkdf,
 	salt::Salt,
 };
 
 use js_sys::{Reflect, Uint8Array};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
+
+#[cfg(target_arch = "wasm32")]
 use web_sys::{
 	window, AuthenticationExtensionsClientInputs, AuthenticationExtensionsPrfInputs,
 	AuthenticationExtensionsPrfValues, AuthenticatorAttachment, AuthenticatorSelectionCriteria,
@@ -42,6 +48,12 @@ pub struct Credential {
 	pub attestation: Vec<u8>,
 	// { "type": "webauthn.create", "challenge": base64-encoded, "origin": origin-url, "crossOrigin": boolean }
 	pub client_data_json: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Bundle {
+	pub cred: Credential,
+	pub mk: encrypted::Encrypted,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -81,19 +93,52 @@ pub struct Passkey {
 		deserialize_with = "deserialize_vec_base64"
 	)]
 	pub pub_key: Vec<u8>,
+	pub mk: encrypted::Encrypted,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
 	JsViolated,
+	WrongKey,
 }
 
+#[cfg(target_arch = "wasm32")]
 impl From<JsValue> for Error {
 	fn from(_value: JsValue) -> Self {
 		Error::JsViolated
 	}
 }
 
+pub fn lock(prf: &[u8], master_key: &aes_gcm::Aes) -> encrypted::Encrypted {
+	lock_with_params(prf, Salt::generate(), master_key)
+}
+
+fn lock_with_params(prf: &[u8], salt: Salt, master_key: &aes_gcm::Aes) -> encrypted::Encrypted {
+	let aes = aes_from_prf_output_salt(&prf, &salt);
+	let bytes = master_key.as_bytes();
+	let encrypted_mk = aes.encrypt(&bytes);
+
+	encrypted::Encrypted {
+		ct: encrypted_mk,
+		salt,
+	}
+}
+
+pub fn unlock(mk: encrypted::Encrypted, prf: &[u8]) -> Result<aes_gcm::Aes, Error> {
+	let aes = aes_from_prf_output_salt(&prf, &mk.salt);
+	let key_iv = aes.decrypt(&mk.ct).map_err(|_| Error::WrongKey)?;
+
+	Ok(aes_gcm::Aes::try_from(key_iv.as_slice()).map_err(|_| Error::WrongKey)?)
+}
+
+fn aes_from_prf_output_salt(prf: &[u8], salt: &Salt) -> aes_gcm::Aes {
+	let key_iv =
+		hkdf::Hkdf::from_ikm(prf).expand::<{ aes_gcm::KEY_SIZE + aes_gcm::IV_SIZE }>(&salt.bytes);
+
+	aes_gcm::Aes::from(&key_iv)
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn register_passkey(
 	rp_name: &str,
 	rp_id: &str,
@@ -165,6 +210,7 @@ pub async fn register_passkey(
 	})
 }
 
+#[cfg(target_arch = "wasm32")]
 pub async fn authenticate(
 	rp_id: &str,
 	ch: &AuthChallenge,
@@ -230,6 +276,7 @@ pub async fn authenticate(
 	))
 }
 
+#[cfg(target_arch = "wasm32")]
 pub async fn derive_prf_output(
 	ch: &Salt,
 	cred_id: &CredentialId,
@@ -274,4 +321,20 @@ pub async fn derive_prf_output(
 	let prf_result_first_uint8 = Uint8Array::new(&prf_result_first_arr);
 
 	Ok(prf_result_first_uint8.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{lock, unlock};
+	use crate::aes_gcm;
+
+	#[test]
+	fn test_lock_unlock() {
+		let aes = aes_gcm::Aes::new();
+		let prf = b"123";
+		let locked = lock(prf, &aes);
+		let unlocked = unlock(locked, prf);
+
+		assert_eq!(unlocked, Ok(aes));
+	}
 }
