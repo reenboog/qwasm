@@ -2,7 +2,7 @@ use crate::{
 	encrypted,
 	protocol::{Error, Network},
 	register::LockedUser,
-	seeds::{Seed, Welcome},
+	seeds::{Invite, Seed, Welcome},
 	user,
 	vault::LockedNode,
 	webauthn,
@@ -24,6 +24,7 @@ pub struct JsNet {
 	pub(crate) unlock_session: js_sys::Function,
 	pub(crate) get_user: js_sys::Function,
 	pub(crate) get_invite: js_sys::Function,
+	pub(crate) invite: js_sys::Function,
 	pub(crate) start_passkey_registration: js_sys::Function,
 	pub(crate) finish_passkey_registration: js_sys::Function,
 	pub(crate) start_passkey_auth: js_sys::Function,
@@ -41,6 +42,7 @@ impl JsNet {
 		get_mk: js_sys::Function,
 		get_user: js_sys::Function,
 		get_invite: js_sys::Function,
+		invite: js_sys::Function,
 		lock_session: js_sys::Function,
 		unlock_session: js_sys::Function,
 		start_passkey_registration: js_sys::Function,
@@ -56,6 +58,7 @@ impl JsNet {
 			get_mk,
 			get_user,
 			get_invite,
+			invite,
 			lock_session,
 			unlock_session,
 			start_passkey_registration,
@@ -180,6 +183,20 @@ impl Network for JsNet {
 		let welcome: Welcome = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
 
 		Ok(welcome)
+	}
+
+	async fn invite(&self, invite: &Invite) -> Result<(), Error> {
+		let serialized = serde_json::to_string(invite).unwrap();
+		let json = JsValue::from(serialized);
+		let this = JsValue::NULL;
+		let promise = self
+			.invite
+			.call1(&this, &json)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
+
+		Ok(())
 	}
 
 	// TODO: probably pass user_id as well

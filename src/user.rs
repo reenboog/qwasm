@@ -192,13 +192,13 @@ impl User {
 
 	// pin is just a password used to encrypt the seeds, if any
 	// at this point, all we know is an email address and the seeds
-	pub fn share_seeds_to_email(
+	pub fn invite_with_seeds_for_email(
 		&mut self,
+		email: &str,
 		pin: &str,
 		fs_ids: Option<&[u64]>,
 		db_ids: Option<&[database::Index]>,
-		email: &str,
-	) -> String {
+	) -> Invite {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);
 		let payload = password_lock::lock(&bundle, pin).unwrap();
 
@@ -208,18 +208,15 @@ impl User {
 			.identity
 			.private()
 			.sign(&ctx_to_sign(self.identity.public(), &export));
-		let invite = Invite {
+
+		Invite {
 			user_id: receiver_id,
 			sender: self.identity.public().clone(),
 			email: email.to_string(),
 			payload,
 			export,
 			sig,
-		};
-
-		let serialized = serde_json::to_string(&invite).unwrap();
-
-		serialized
+		}
 	}
 }
 
@@ -309,9 +306,6 @@ impl User {
 
 	// export all *available* seeds; returns json-serialized Invite
 	// used when creating new admins
-	pub fn export_all_seeds_to_email(&mut self, pin: &str, email: &str) -> String {
-		self.share_seeds_to_email(pin, None, None, email)
-	}
 
 	// FIXME: sign as well
 	//
@@ -442,8 +436,7 @@ mod tests {
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
-		let invite: Invite = serde_json::from_str(&invite).unwrap();
+		let invite = god.invite_with_seeds_for_email("alice.mail.com", pin, None, None);
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -486,8 +479,7 @@ mod tests {
 
 		let pin = "1234567890";
 		// share all root seeds
-		let invite = god.export_all_seeds_to_email(pin, "adaml@mail.com");
-		let invite: Invite = serde_json::from_str(&invite).unwrap();
+		let invite = god.invite_with_seeds_for_email("adaml@mail.com", pin, None, None);
 		let roots = locked_user.roots;
 		let welcome = Welcome {
 			user_id: invite.user_id,
@@ -531,7 +523,8 @@ mod tests {
 			table: "requests".to_string(),
 			column: "content".to_string(),
 		};
-		let eve_invite = adam.share_seeds_to_email(
+		let eve_invite = adam.invite_with_seeds_for_email(
+			"eve@mail.com",
 			eve_pin,
 			None,
 			Some(&[
@@ -540,9 +533,7 @@ mod tests {
 				idx_sales_id.clone(),
 				idx_requests_content.clone(),
 			]),
-			"eve@mail.com",
 		);
-		let eve_invite: Invite = serde_json::from_str(&eve_invite).unwrap();
 		let welcome = Welcome {
 			user_id: eve_invite.user_id,
 			sender: eve_invite.sender,
@@ -577,8 +568,7 @@ mod tests {
 		// now eve share all her shares with abel
 		let abel_pin = "777";
 		let abel_pass = "abel_pass";
-		let abel_invite = eve.export_all_seeds_to_email(&abel_pin, "abel@mail.com");
-		let abel_invite: Invite = serde_json::from_str(&abel_invite).unwrap();
+		let abel_invite = eve.invite_with_seeds_for_email("abel@mail.com", abel_pin, None, None);
 		let welcome = Welcome {
 			user_id: abel_invite.user_id,
 			sender: abel_invite.sender,
@@ -613,7 +603,8 @@ mod tests {
 		let idx_sales = database::Index::Table {
 			table: "sales".to_string(),
 		};
-		let cain_invite = eve.share_seeds_to_email(
+		let cain_invite = eve.invite_with_seeds_for_email(
+			"eve@mail.com",
 			cain_pin,
 			None,
 			Some(&[
@@ -632,9 +623,7 @@ mod tests {
 					column: "def".to_string(),
 				},
 			]),
-			"eve@mail.com",
 		);
-		let cain_invite: Invite = serde_json::from_str(&cain_invite).unwrap();
 		let welcome = Welcome {
 			user_id: cain_invite.user_id,
 			sender: cain_invite.sender,

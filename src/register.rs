@@ -194,8 +194,7 @@ mod tests {
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
-		let invite: Invite = serde_json::from_str(&invite).unwrap();
+		let invite = god.invite_with_seeds_for_email("alice.mail.com", pin, None, None);
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -227,8 +226,7 @@ mod tests {
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
-		let invite: Invite = serde_json::from_str(&invite).unwrap();
+		let invite = god.invite_with_seeds_for_email("alice.mail.com", pin, None, None);
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -244,8 +242,7 @@ mod tests {
 
 		let new_pin = "555";
 		let new_pass = "new_admin_pass";
-		let new_invite = admin.export_all_seeds_to_email(new_pin, "bob.mail.com");
-		let new_invite: Invite = serde_json::from_str(&new_invite).unwrap();
+		let new_invite = admin.invite_with_seeds_for_email("bob.mail.com", &new_pin, None, None);
 		let welcome = Welcome {
 			user_id: new_invite.user_id,
 			sender: new_invite.sender,

@@ -5,11 +5,12 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use web_sys::window;
 
 use crate::{
-	aes_gcm, encrypted, password_lock,
-	register::{self, LockedUser, NewUser},
-	seeds::{Seed, Welcome, ROOT_ID},
-	session,
+	aes_gcm, encrypted,
 	js_net::JsNet,
+	password_lock,
+	register::{self, LockedUser, NewUser},
+	seeds::{Invite, Seed, Welcome, ROOT_ID},
+	session,
 	user::{self, User},
 	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
 	webauthn,
@@ -148,6 +149,7 @@ pub(crate) trait Network {
 	// the backend may mark these uploads as pending at first and as complete when all data has been transmitted
 	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error>;
 	async fn get_invite(&self, email: &str) -> Result<Welcome, Error>;
+	async fn invite(&self, invite: &Invite) -> Result<(), Error>;
 	async fn get_user(&self, id: u64) -> Result<LockedUser, Error>;
 	async fn get_master_key(&self, user_id: u64) -> Result<encrypted::Encrypted, Error>;
 	async fn lock_session(&self, token_id: &str, token: &Seed) -> Result<(), Error>;
@@ -800,8 +802,18 @@ impl Protocol {
 			.map_err(|_| Error::NoAccess)
 	}
 
-	pub fn export_all_seeds_to_email(&mut self, pin: &str, email: &str) -> String {
-		self.user.export_all_seeds_to_email(pin, email)
+	pub async fn invite_with_all_seeds_for_email(
+		&mut self,
+		email: &str,
+		pin: &str,
+	) -> Result<(), Error> {
+		let invite = self
+			.user
+			.invite_with_seeds_for_email(email, pin, None, None);
+
+		self.net.invite(&invite).await?;
+
+		Ok(())
 	}
 
 	// TODO: encrypt/decrypt announcement
