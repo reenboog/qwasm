@@ -42,27 +42,26 @@ impl LockedUser {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Signup {
+pub struct NewUser {
 	// to be sent to the backend
-	pub(crate) locked_user: String,
+	pub(crate) locked: LockedUser,
 	// to be used internally
 	pub(crate) user: User,
 }
 
 // registration to upload (encrypted & encoded)
-pub(crate) fn signup_as_god(pass: &str) -> Result<Signup, Error> {
+pub(crate) fn signup_as_god(pass: &str) -> Result<NewUser, Error> {
 	let identity = identity::Identity::generate(user::GOD_ID);
 	let (fs, root) = FileSystem::new(&User::fs_seed(identity.private()), &identity);
 
 	signup_with_params(pass, identity, None, fs, vec![root])
 }
 
-pub(crate) fn signup_as_admin(pass: &str, welcome: &str, pin: &str) -> Result<Signup, Error> {
-	let welcome: Welcome = serde_json::from_str(welcome).map_err(|_| Error::BadJson)?;
+pub(crate) fn signup_as_admin(pass: &str, welcome: &Welcome, pin: &str) -> Result<NewUser, Error> {
 	let bundle = password_lock::unlock(&welcome.imports, pin).map_err(|_| Error::WrongPass)?;
 	let bundle: Bundle = serde_json::from_slice(&bundle).map_err(|_| Error::BadJson)?;
 	let import = Import {
-		sender: welcome.sender,
+		sender: welcome.sender.clone(),
 		bundle: bundle.clone(),
 	};
 
@@ -71,7 +70,7 @@ pub(crate) fn signup_as_admin(pass: &str, welcome: &str, pin: &str) -> Result<Si
 	signup_with_params(
 		pass,
 		identity::Identity::generate(welcome.user_id),
-		Some((import, welcome.sig)),
+		Some((import, welcome.sig.clone())),
 		fs,
 		vec![],
 	)
@@ -83,7 +82,7 @@ fn signup_with_params(
 	import: Option<(Import, ed448::Signature)>,
 	fs: FileSystem,
 	nodes_to_upload: Vec<LockedNode>,
-) -> Result<Signup, Error> {
+) -> Result<NewUser, Error> {
 	let locked_priv = password_lock::lock(identity.private(), pass).unwrap();
 	let _pub = identity.public();
 	let id = identity.id();
@@ -117,8 +116,8 @@ fn signup_with_params(
 		roots: nodes_to_upload,
 	};
 
-	Ok(Signup {
-		locked_user: serde_json::to_string(&locked_user).unwrap(),
+	Ok(NewUser {
+		locked: locked_user,
 		user: User {
 			identity,
 			imports: imports.into_iter().map(|im| im.0).collect(),
@@ -168,21 +167,20 @@ fn signup_with_params(
 #[cfg(test)]
 mod tests {
 	use crate::{
-		register::LockedUser,
 		seeds::{Invite, Welcome},
 		user::{self},
 	};
 
-	use super::{signup_as_admin, signup_as_god, Signup};
+	use super::{signup_as_admin, signup_as_god, NewUser};
 
 	#[test]
 	fn test_unlock() {
 		let pass = "simple_pass";
-		let Signup {
-			locked_user: json,
+		let NewUser {
+			locked: locked_user,
 			user,
 		} = signup_as_god(&pass).unwrap();
-		let unlock = user::unlock_with_pass(pass, &json);
+		let unlock = user::unlock_with_pass(pass, &locked_user);
 
 		assert_eq!(Ok(user), unlock);
 	}
@@ -190,15 +188,14 @@ mod tests {
 	#[test]
 	fn test_register_admin_and_unlock() {
 		let god_pass = "god_pass";
-		let Signup {
-			locked_user: locked_god,
+		let NewUser {
+			locked: locked_god,
 			user: mut god,
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
 		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
 		let invite: Invite = serde_json::from_str(&invite).unwrap();
-		let locked_god: LockedUser = serde_json::from_str(&locked_god).unwrap();
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -207,19 +204,16 @@ mod tests {
 			nodes: locked_god.roots.clone(),
 			sig: invite.sig,
 		};
-		let welcome = serde_json::to_string(&welcome).unwrap();
 		let admin_pass = "admin_pass";
-		let Signup {
-			locked_user: admin_json,
+		let NewUser {
+			locked: mut locked_admin,
 			user: admin,
 		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
 		// pretend the backend returns all locked nodes for this user
-		let mut decoded: LockedUser = serde_json::from_str(&admin_json).unwrap();
-		decoded.roots = locked_god.roots;
-		let reencoded = serde_json::to_string(&decoded).unwrap();
+		locked_admin.roots = locked_god.roots;
 
-		let unlocked_admin = user::unlock_with_pass(admin_pass, &reencoded).unwrap();
+		let unlocked_admin = user::unlock_with_pass(admin_pass, &locked_admin).unwrap();
 
 		assert_eq!(admin, unlocked_admin);
 	}
@@ -227,15 +221,14 @@ mod tests {
 	#[test]
 	fn test_register_admin_by_admin() {
 		let god_pass = "god_pass";
-		let Signup {
-			locked_user,
+		let NewUser {
+			locked: locked_user,
 			user: mut god,
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
 		let invite = god.export_all_seeds_to_email(pin, "alice.mail.com");
 		let invite: Invite = serde_json::from_str(&invite).unwrap();
-		let locked_user: LockedUser = serde_json::from_str(&locked_user).unwrap();
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -243,10 +236,9 @@ mod tests {
 			nodes: locked_user.roots,
 			sig: invite.sig,
 		};
-		let welcome = serde_json::to_string(&welcome).unwrap();
 		let admin_pass = "admin_pass";
-		let Signup {
-			locked_user,
+		let NewUser {
+			locked: locked_user,
 			user: mut admin,
 		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
 
@@ -254,7 +246,6 @@ mod tests {
 		let new_pass = "new_admin_pass";
 		let new_invite = admin.export_all_seeds_to_email(new_pin, "bob.mail.com");
 		let new_invite: Invite = serde_json::from_str(&new_invite).unwrap();
-		let locked_user: LockedUser = serde_json::from_str(&locked_user).unwrap();
 		let welcome = Welcome {
 			user_id: new_invite.user_id,
 			sender: new_invite.sender,
@@ -262,12 +253,11 @@ mod tests {
 			nodes: locked_user.roots,
 			sig: new_invite.sig,
 		};
-		let welcome = serde_json::to_string(&welcome).unwrap();
-		let Signup {
-			locked_user: new_admin_json,
+		let NewUser {
+			locked: new_admin_locked,
 			user: new_admin,
 		} = signup_as_admin(new_pass, &welcome, new_pin).unwrap();
-		let new_unlocked_admin = user::unlock_with_pass(new_pass, &new_admin_json).unwrap();
+		let new_unlocked_admin = user::unlock_with_pass(new_pass, &new_admin_locked).unwrap();
 
 		assert_eq!(new_admin, new_unlocked_admin);
 	}

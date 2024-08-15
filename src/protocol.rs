@@ -7,8 +7,8 @@ use web_sys::window;
 
 use crate::{
 	aes_gcm, encrypted, password_lock,
-	register::{LockedUser, Signup},
-	seeds::{Seed, ROOT_ID},
+	register::{self, LockedUser, NewUser},
+	seeds::{Seed, Welcome, ROOT_ID},
 	session,
 	user::{self, User},
 	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
@@ -73,6 +73,18 @@ impl From<vault::Error> for Error {
 	}
 }
 
+impl From<register::Error> for Error {
+	fn from(er: register::Error) -> Self {
+		use register::Error as Er;
+
+		match er {
+			Er::WrongPass => Error::WrongPass,
+			Er::BadJson => Error::BadJson,
+			Er::ForgedSig => Error::ForgedSig,
+		}
+	}
+}
+
 #[wasm_bindgen]
 pub struct DirView {
 	items: Vec<NodeView>,
@@ -130,9 +142,12 @@ impl NodeView {
 // #[async_trait]
 #[async_trait(?Send)]
 pub(crate) trait Network {
+	async fn signup(&self, signup: user::Signup) -> Result<(), Error>;
+	async fn login(&self, login: user::Login) -> Result<LockedUser, Error>;
 	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error>;
 	// the backend may mark these uploads as pending at first and as complete when all data has been transmitted
 	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error>;
+	async fn get_invite(&self, email: &str) -> Result<Welcome, Error>;
 	async fn get_user(&self, id: u64) -> Result<LockedUser, Error>;
 	async fn get_master_key(&self, user_id: u64) -> Result<encrypted::Encrypted, Error>;
 	async fn lock_session(&self, token_id: &str, token: &Seed) -> Result<(), Error>;
@@ -193,15 +208,17 @@ impl Storage {
 	}
 }
 
-
 #[wasm_bindgen]
 pub struct JsNet {
+	pub(crate) signup: js_sys::Function,
+	pub(crate) login: js_sys::Function,
 	pub(crate) fetch_subtree: js_sys::Function,
 	pub(crate) upload_nodes: js_sys::Function,
 	pub(crate) get_mk: js_sys::Function,
 	pub(crate) lock_session: js_sys::Function,
 	pub(crate) unlock_session: js_sys::Function,
 	pub(crate) get_user: js_sys::Function,
+	pub(crate) get_invite: js_sys::Function,
 	pub(crate) start_passkey_registration: js_sys::Function,
 	pub(crate) finish_passkey_registration: js_sys::Function,
 	pub(crate) start_passkey_auth: js_sys::Function,
@@ -212,10 +229,13 @@ pub struct JsNet {
 impl JsNet {
 	#[wasm_bindgen(constructor)]
 	pub fn new(
+		signup: js_sys::Function,
+		login: js_sys::Function,
 		fetch_subtree: js_sys::Function,
 		upload_nodes: js_sys::Function,
 		get_mk: js_sys::Function,
 		get_user: js_sys::Function,
+		get_invite: js_sys::Function,
 		lock_session: js_sys::Function,
 		unlock_session: js_sys::Function,
 		start_passkey_registration: js_sys::Function,
@@ -224,10 +244,13 @@ impl JsNet {
 		finish_passkey_auth: js_sys::Function,
 	) -> Self {
 		Self {
+			signup,
+			login,
 			fetch_subtree,
 			upload_nodes,
 			get_mk,
 			get_user,
+			get_invite,
 			lock_session,
 			unlock_session,
 			start_passkey_registration,
@@ -250,6 +273,36 @@ impl Network for JsNet {
 	// } else {
 	// 	FetchError::NoNetwork
 	// }
+	async fn signup(&self, signup: user::Signup) -> Result<(), Error> {
+		let serialized = serde_json::to_string(&signup).unwrap();
+		let json = JsValue::from(serialized);
+		let this = JsValue::NULL;
+		let promise = self
+			.signup
+			.call1(&this, &json)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
+
+		Ok(())
+	}
+
+	async fn login(&self, login: user::Login) -> Result<LockedUser, Error> {
+		let this = JsValue::NULL;
+		let serialized = serde_json::to_string(&login).unwrap();
+		let json = JsValue::from(serialized);
+		let promise = self
+			.login
+			.call1(&this, &json)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let locked_user: LockedUser = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(locked_user)
+	}
+
 	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error> {
 		let this = JsValue::NULL;
 		let id = JsValue::from(id.to_string());
@@ -307,6 +360,21 @@ impl Network for JsNet {
 		let user: LockedUser = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
 
 		Ok(user)
+	}
+
+	async fn get_invite(&self, email: &str) -> Result<Welcome, Error> {
+		let this = JsValue::NULL;
+		let email = JsValue::from(email);
+		let promise = self
+			.get_invite
+			.call1(&this, &email)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let welcome: Welcome = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(welcome)
 	}
 
 	// TODO: probably pass user_id as well
@@ -467,62 +535,45 @@ impl TryFrom<Node> for DirView {
 	}
 }
 
-#[wasm_bindgen]
-pub struct Registered {
-	locked_user: String,
-	protocol: Protocol,
-	// envelope + token_id?
-}
-
-#[wasm_bindgen]
-impl Registered {
-	pub fn json(&self) -> String {
-		self.locked_user.clone()
-	}
-
-	pub fn as_protocol(self) -> Protocol {
-		self.protocol
-	}
-}
-
 impl Protocol {
 	#[cfg(not(target_arch = "wasm32"))]
 	pub(crate) async fn register_as_god<T>(
+		email: &str,
 		pass: &str,
-		net: T,
-		remember_me: bool,
-	) -> Result<Registered, Error>
-	where
-		T: Network + 'static,
-	{
-		Self::register_as_god_impl(pass, Box::new(net), remember_me).await
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	pub(crate) async fn register_as_admin<T>(
-		pass: &str,
-		welcome: &str,
-		pin: &str,
-		net: T,
-		remember_me: bool,
-	) -> Result<Registered, Error>
-	where
-		T: Network + 'static,
-	{
-		Self::register_as_admin_impl(pass, welcome, pin, Box::new(net), remember_me).await
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	async fn unlock_with_pass<T>(
-		pass: &str,
-		locked_user: &str,
 		net: T,
 		remember_me: bool,
 	) -> Result<Protocol, Error>
 	where
 		T: Network + 'static,
 	{
-		Self::unlock_with_pass_impl(pass, locked_user, Box::new(net), remember_me).await
+		Self::register_as_god_impl(email, pass, Box::new(net), remember_me).await
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	pub(crate) async fn register_as_admin<T>(
+		email: &str,
+		pass: &str,
+		pin: &str,
+		net: T,
+		remember_me: bool,
+	) -> Result<Protocol, Error>
+	where
+		T: Network + 'static,
+	{
+		Self::register_as_admin_impl(email, pass, pin, Box::new(net), remember_me).await
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	async fn unlock_with_pass<T>(
+		email: &str,
+		pass: &str,
+		net: T,
+		remember_me: bool,
+	) -> Result<Protocol, Error>
+	where
+		T: Network + 'static,
+	{
+		Self::unlock_with_pass_impl(email, pass, Box::new(net), remember_me).await
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
@@ -553,7 +604,8 @@ impl Protocol {
 				let user = net.get_user(user_id).await?;
 				let mk =
 					session::unlock(envelope.encrypted_mk, token).map_err(|_| Error::NoSession)?;
-				let user = user::unlock_with_master_key(user, &mk).map_err(|_| Error::NoSession)?;
+				let user =
+					user::unlock_with_master_key(&user, &mk).map_err(|_| Error::NoSession)?;
 
 				let protocol = Protocol {
 					cd: None,
@@ -572,72 +624,84 @@ impl Protocol {
 	}
 
 	async fn register_as_god_impl(
+		email: &str,
 		pass: &str,
-		net: Box<dyn Network>,
-		remember_me: bool,
-	) -> Result<Registered, Error> {
-		use crate::register::signup_as_god;
-
-		let Signup { locked_user, user } = signup_as_god(pass).unwrap();
-
-		let protocol = Protocol {
-			cd: None,
-			user,
-			net,
-			storage: Storage {},
-		};
-
-		// if remember_me {
-		// 	protocol.lock_session(pass).await?;
-		// }
-
-		Ok(Registered {
-			locked_user: locked_user,
-			protocol,
-		})
-	}
-
-	async fn register_as_admin_impl(
-		pass: &str,
-		welcome: &str,
-		pin: &str,
-		net: Box<dyn Network>,
-		remember_me: bool,
-	) -> Result<Registered, Error> {
-		use crate::register::signup_as_admin;
-		use crate::register::{self};
-
-		let Signup { locked_user, user } =
-			signup_as_admin(pass, welcome, pin).map_err(|e| match e {
-				register::Error::WrongPass => Error::WrongPass,
-				register::Error::BadJson => Error::BadJson,
-				register::Error::ForgedSig => Error::ForgedSig,
-			})?;
-
-		let protocol = Protocol {
-			cd: None,
-			user,
-			net,
-			storage: Storage {},
-		};
-
-		// if remember_me {
-		// 	protocol.lock_session(pass).await?;
-		// }
-		
-		Ok(Registered {
-			locked_user,
-			protocol,
-		})
-	}
-
-	async fn unlock_with_pass_impl(
-		pass: &str,
-		locked_user: &str,
 		net: Box<dyn Network>,
 		remember_me: bool,
 	) -> Result<Protocol, Error> {
-		let user = user::unlock_with_pass(pass, locked_user).map_err(|e| match e {
+		let NewUser {
+			locked: locked_user,
+			user,
+		} = register::signup_as_god(pass).unwrap();
+
+		net.signup(user::Signup {
+			email: email.to_string(),
+			pass: pass.to_string(),
+			user: locked_user,
+		})
+		.await?;
+
+		let protocol = Protocol {
+			cd: None,
+			user,
+			net,
+			storage: Storage {},
+		};
+
+		if remember_me {
+			protocol.lock_session(pass).await?;
+		}
+
+		Ok(protocol)
+	}
+
+	async fn register_as_admin_impl(
+		email: &str,
+		pass: &str,
+		pin: &str,
+		net: Box<dyn Network>,
+		remember_me: bool,
+	) -> Result<Protocol, Error> {
+		let welcome = net.get_invite(email).await?;
+		let NewUser {
+			locked: locked_user,
+			user,
+		} = register::signup_as_admin(pass, &welcome, pin)?;
+
+		net.signup(user::Signup {
+			email: email.to_string(),
+			pass: pass.to_string(),
+			user: locked_user,
+		})
+		.await?;
+
+		let protocol = Protocol {
+			cd: None,
+			user,
+			net,
+			storage: Storage {},
+		};
+
+		if remember_me {
+			protocol.lock_session(pass).await?;
+		}
+
+		Ok(protocol)
+	}
+
+	async fn unlock_with_pass_impl(
+		email: &str,
+		pass: &str,
+		net: Box<dyn Network>,
+		remember_me: bool,
+	) -> Result<Protocol, Error> {
+		let locked_user = net
+			.login(user::Login {
+				email: email.to_string(),
+				pass: pass.to_string(),
+			})
+			.await?;
+		let user = user::unlock_with_pass(pass, &locked_user).map_err(|e| match e {
 			user::Error::BadJson => Error::BadJson,
 			user::Error::WrongPass => Error::WrongPass,
 			_ => Error::BadOperation,
@@ -650,9 +714,9 @@ impl Protocol {
 			storage: Storage {},
 		};
 
-		// if remember_me {
-		// 	protocol.lock_session(pass).await?;
-		// }
+		if remember_me {
+			protocol.lock_session(pass).await?;
+		}
 
 		Ok(protocol)
 	}
@@ -661,19 +725,24 @@ impl Protocol {
 #[wasm_bindgen]
 impl Protocol {
 	#[cfg(target_arch = "wasm32")]
-	pub async fn register_as_god(pass: &str, net: JsNet, remember_me: bool) -> Result<Registered, Error> {
-		Self::register_as_god_impl(pass, Box::new(net), remember_me).await
+	pub async fn register_as_god(
+		email: &str,
+		pass: &str,
+		net: JsNet,
+		remember_me: bool,
+	) -> Result<Protocol, Error> {
+		Self::register_as_god_impl(email, pass, Box::new(net), remember_me).await
 	}
 
 	#[cfg(target_arch = "wasm32")]
 	pub async fn register_as_admin(
+		email: &str,
 		pass: &str,
-		welcome: &str,
 		pin: &str,
 		net: JsNet,
 		remember_me: bool,
-	) -> Result<Registered, Error> {
-		Self::register_as_admin_impl(pass, welcome, pin, Box::new(net), remember_me).await
+	) -> Result<Protocol, Error> {
+		Self::register_as_admin_impl(email, pass, pin, Box::new(net), remember_me).await
 	}
 
 	#[cfg(target_arch = "wasm32")]
@@ -773,7 +842,7 @@ impl Protocol {
 		};
 		let mk = webauthn::unlock(passkey.mk, &prf_output).map_err(|_| Error::NoAccess)?;
 		let user = net.get_user(passkey.user_id).await?;
-		let user = user::unlock_with_master_key(user, &mk).map_err(|_| Error::NoAccess)?;
+		let user = user::unlock_with_master_key(&user, &mk).map_err(|_| Error::NoAccess)?;
 		let storage = Storage {};
 		let protocol = Protocol {
 			cd: None,
@@ -782,9 +851,9 @@ impl Protocol {
 			storage,
 		};
 
-		// if remember_me {
-		// 	protocol.lock_session_with_master_key(mk).await?;
-		// }
+		if remember_me {
+			protocol.lock_session_with_master_key(mk).await?;
+		}
 
 		Ok(protocol)
 	}
