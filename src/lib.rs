@@ -16,6 +16,7 @@ pub mod x448;
 mod aes_gcm;
 mod encrypted;
 mod id;
+mod js_net;
 mod key;
 mod key_pair;
 mod private_key;
