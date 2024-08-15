@@ -33,6 +33,7 @@ pub struct Credential {
 		deserialize_with = "deserialize_vec_base64"
 	)]
 	pub id: CredentialId,
+	pub name: String,
 	#[serde(
 		serialize_with = "serialize_vec_base64",
 		deserialize_with = "deserialize_vec_base64"
@@ -41,7 +42,6 @@ pub struct Credential {
 	pub attestation: Vec<u8>,
 	// { "type": "webauthn.create", "challenge": base64-encoded, "origin": origin-url, "crossOrigin": boolean }
 	pub client_data_json: String,
-	// TODO: name?
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -75,7 +75,7 @@ pub struct Passkey {
 		deserialize_with = "deserialize_vec_base64"
 	)]
 	pub id: CredentialId,
-	// name?
+	pub name: String,
 	#[serde(
 		serialize_with = "serialize_vec_base64",
 		deserialize_with = "deserialize_vec_base64"
@@ -101,6 +101,7 @@ pub async fn register_passkey(
 	name: &str,
 	user_id: &[u8],
 	reg: &Registration,
+	key_name: &str,
 ) -> Result<Credential, Error> {
 	let user = PublicKeyCredentialUserEntity::new(email, name, &Uint8Array::from(user_id));
 	let rp = PublicKeyCredentialRpEntity::new(rp_name);
@@ -158,6 +159,7 @@ pub async fn register_passkey(
 
 	Ok(Credential {
 		id: raw_id_vec,
+		name: key_name.to_string(),
 		attestation: attestation_vec,
 		client_data_json: client_data_string,
 	})

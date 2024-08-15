@@ -696,6 +696,7 @@ impl Protocol {
 			name,
 			&user_id.to_be_bytes(), // FIXME: pass as is and convert inside the function
 			&reg,
+			key_name,
 		)
 		.await
 		.map_err(|_| Error::JsViolated)?;
