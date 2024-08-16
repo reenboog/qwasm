@@ -6,6 +6,7 @@ use crate::{
 	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
 	ed448::{KeyPairEd448, PrivateKeyEd448, PublicKeyEd448, Signature},
 	hkdf, hmac,
+	id::Uid,
 	x448::{dh_exchange, KeyPairX448, PrivateKeyX448, PublicKeyX448},
 };
 
@@ -43,7 +44,7 @@ impl Private {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Public {
 	// created by by the inviting party (unless god)
-	pub(crate) id: u64,
+	pub(crate) id: Uid,
 	// can be used to encrypt messages to or verify signatures against
 	pub(crate) x448: PublicKeyX448,
 	pub(crate) ed448: PublicKeyEd448,
@@ -70,7 +71,7 @@ fn aes_from_dh_keys(sk: &PrivateKeyX448, pk: &PublicKeyX448) -> aes_gcm::Aes {
 }
 
 impl Public {
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> Uid {
 		// id::from_bytes(&[self.x448.as_bytes(), self.ed448.as_bytes().as_slice()].concat())
 		self.id
 	}
@@ -94,7 +95,7 @@ impl Public {
 		let bytes = [
 			self.x448.as_bytes().as_slice(),
 			self.ed448.as_bytes(),
-			&self.id().to_be_bytes(),
+			&self.id().as_bytes(),
 		]
 		.concat();
 
@@ -116,11 +117,11 @@ impl Public {
 }
 
 impl Identity {
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> Uid {
 		self._pub.id()
 	}
 
-	pub fn generate(id: u64) -> Self {
+	pub fn generate(id: Uid) -> Self {
 		let KeyPairX448 {
 			private: x448_priv,
 			public: x448_pub,
@@ -155,10 +156,11 @@ impl Identity {
 #[cfg(test)]
 mod tests {
 	use super::Identity;
+	use crate::id::Uid;
 
 	#[test]
 	fn test_encrypt_decrypt() {
-		let ident = Identity::generate(0);
+		let ident = Identity::generate(Uid::new(0));
 		let msg = b"hi there";
 		let encrypted = ident.public().encrypt_serialized(msg);
 		let decrypted = ident.private().decrypt(&encrypted).unwrap();
@@ -168,7 +170,7 @@ mod tests {
 
 	#[test]
 	fn test_sign_verify() {
-		let ident = Identity::generate(0);
+		let ident = Identity::generate(Uid::new(0));
 		let msg = b"hi there";
 		let sig = ident.private().sign(msg);
 
@@ -177,7 +179,7 @@ mod tests {
 
 	#[test]
 	fn test_serialize_deserialized() {
-		let ident = Identity::generate(0);
+		let ident = Identity::generate(Uid::new(0));
 		let serialized = serde_json::to_string(&ident).unwrap();
 		let deserialized = serde_json::from_str(&serialized).unwrap();
 

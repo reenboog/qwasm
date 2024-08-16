@@ -4,6 +4,7 @@ use crate::{
 	aes_gcm,
 	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
 	encrypted, hkdf,
+	id::Uid,
 	salt::Salt,
 };
 
@@ -58,7 +59,7 @@ pub struct Bundle {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AuthChallenge {
-	pub id: u64,
+	pub id: Uid,
 	pub challenge: Salt,
 	pub prf_salt: Option<Salt>,
 }
@@ -81,7 +82,7 @@ pub struct Authentication {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Passkey {
 	pub prf_salt: Salt,
-	pub user_id: u64,
+	pub user_id: Uid,
 	#[serde(
 		serialize_with = "serialize_vec_base64",
 		deserialize_with = "deserialize_vec_base64"

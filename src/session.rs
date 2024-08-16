@@ -1,7 +1,5 @@
-use crate::{aes_gcm, encrypted, hkdf, salt::Salt, seeds::Seed};
+use crate::{aes_gcm, encrypted, hkdf, id::Uid, salt::Salt, seeds::Seed};
 use serde::{Deserialize, Serialize};
-
-const TOKEN_ID_SIZE: usize = 32;
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -20,7 +18,7 @@ pub struct ToLock {
 #[derive(Serialize, Deserialize)]
 pub struct Envelope {
 	// hex-encoded
-	pub token_id: String,
+	pub token_id: Uid,
 	pub encrypted_mk: encrypted::Encrypted,
 }
 
@@ -35,10 +33,7 @@ fn lock_with_params(token: Seed, salt: Salt, master_key: &aes_gcm::Aes) -> ToLoc
 	let aes = aes_from_token_salt(&token, &salt);
 	let bytes = master_key.as_bytes();
 	let encrypted_mk = aes.encrypt(&bytes);
-	let token_id = hex::encode(
-		hkdf::Hkdf::from_ikm(&[token.bytes.as_slice(), &bytes].concat())
-			.expand_no_info::<TOKEN_ID_SIZE>(),
-	);
+	let token_id = Uid::from_bytes(&[token.bytes.as_slice(), &bytes].concat());
 
 	ToLock {
 		token,
@@ -79,7 +74,7 @@ mod tests {
 		let mk = aes_gcm::Aes::new();
 		let to_lock = lock(&mk);
 
-		println!("id: {}", to_lock.locked.token_id);
+		println!("id: {:?}", to_lock.locked.token_id);
 
 		assert_eq!(Ok(mk), unlock(to_lock.locked.encrypted_mk, to_lock.token));
 	}

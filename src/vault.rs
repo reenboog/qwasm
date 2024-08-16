@@ -5,7 +5,9 @@ use crate::{
 	ed448,
 	encrypted::Encrypted,
 	hkdf::Hkdf,
-	hmac, id, identity,
+	hmac,
+	id::Uid,
+	identity,
 	salt::Salt,
 	seeds::{self, Seed, Seeds, ROOT_ID},
 };
@@ -24,8 +26,9 @@ pub enum Error {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct FileInfo {
-	// TODO: add file size
-	pub(crate) uri_id: u64,
+	// FIXME: add file size
+	// FIXME: use this insted of node id to upload data
+	pub(crate) uri_id: Uid,
 	pub(crate) key_iv: Aes,
 	pub(crate) ext: String,
 }
@@ -44,7 +47,7 @@ impl LockedEntry {
 
 		let bytes = match self {
 			File { info } => [
-				info.uri_id.to_be_bytes().as_slice(),
+				info.uri_id.as_bytes().as_slice(),
 				&info.key_iv.as_bytes(),
 				info.ext.as_bytes(),
 			]
@@ -60,8 +63,8 @@ impl LockedEntry {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub(crate) struct LockedNode {
-	pub(crate) id: u64,
-	pub(crate) parent_id: u64,
+	pub(crate) id: Uid,
+	pub(crate) parent_id: Uid,
 	pub(crate) content: Encrypted,
 	pub(crate) dirty: bool,
 }
@@ -84,7 +87,7 @@ pub(crate) struct NewNodeReq {
 }
 
 impl LockedContent {
-	fn try_from_encrypted(ct: &[u8], aes: Aes, id: u64, parent_id: u64) -> Result<Self, Error> {
+	fn try_from_encrypted(ct: &[u8], aes: Aes, id: Uid, parent_id: Uid) -> Result<Self, Error> {
 		let pt = aes.decrypt(ct).map_err(|_| Error::BadOperation)?;
 		let content: LockedContent =
 			serde_json::from_slice(&pt).map_err(|_| Error::BadOperation)?;
@@ -111,16 +114,16 @@ impl LockedContent {
 		name: &str,
 		created_by: &identity::Public,
 		entry: &LockedEntry,
-		id: u64,
-		parent_id: u64,
+		id: Uid,
+		parent_id: Uid,
 	) -> Vec<u8> {
 		[
 			created_at.to_be_bytes().as_slice(),
 			name.as_bytes(),
 			created_by.hash().as_bytes(),
 			entry.hash().as_bytes(),
-			id.to_be_bytes().as_slice(),
-			parent_id.to_be_bytes().as_slice(),
+			id.as_bytes().as_slice(),
+			parent_id.as_bytes().as_slice(),
 		]
 		.concat()
 	}
@@ -128,8 +131,8 @@ impl LockedContent {
 
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Node {
-	pub(crate) id: u64,
-	pub(crate) parent_id: u64,
+	pub(crate) id: Uid,
+	pub(crate) parent_id: Uid,
 	pub created_at: u64,
 	pub name: String,
 	pub(crate) entry: Entry,
@@ -168,14 +171,14 @@ impl PartialEq for Entry {
 }
 
 // Use to share access to a particular file/dir and paste to aes_from_node_seed_and_salt
-fn seed_from_parent_for_node(parent: &Seed, id: u64) -> Seed {
+fn seed_from_parent_for_node(parent: &Seed, id: Uid) -> Seed {
 	Seed {
-		bytes: Hkdf::from_ikm(&[parent.bytes.as_slice(), &id.to_be_bytes()].concat())
+		bytes: Hkdf::from_ikm(&[parent.bytes.as_slice(), &id.as_bytes()].concat())
 			.expand_no_info::<{ seeds::SEED_SIZE }>(),
 	}
 }
 
-fn aes_from_parent_seed_for_node(seed: &Seed, id: u64, salt: &Salt) -> Aes {
+fn aes_from_parent_seed_for_node(seed: &Seed, id: Uid, salt: &Salt) -> Aes {
 	let node_seed = seed_from_parent_for_node(seed, id);
 
 	aes_from_node_seed(&node_seed, salt)
@@ -264,8 +267,8 @@ fn now() -> u64 {
 impl FileSystem {
 	// returns FileSystem { root_node } & its json
 	pub fn new(fs_seed: &Seed, owner: &identity::Identity) -> (Self, LockedNode) {
-		let id = ROOT_ID;
-		let parent_id = NO_PARENT_ID;
+		let id = Uid::new(ROOT_ID);
+		let parent_id = Uid::new(NO_PARENT_ID);
 		let created_at = now();
 		let name = "/".to_string();
 		let seed = Seed::generate();
@@ -308,7 +311,7 @@ impl FileSystem {
 	pub fn add_or_update_subtree(
 		&mut self,
 		locked_nodes: &[LockedNode],
-		parent_id: u64,
+		parent_id: Uid,
 	) -> Result<(), Error> {
 		if let Some(parent) = self.node_by_id_mut(parent_id) {
 			parent.dirty = false;
@@ -318,9 +321,9 @@ impl FileSystem {
 				ref mut children,
 			} = parent.entry
 			{
-				let mut node_map: HashMap<u64, Node> = HashMap::new();
-				let mut locked_node_map: HashMap<u64, &LockedNode> = HashMap::new();
-				let mut branches: HashMap<u64, Vec<u64>> = HashMap::new();
+				let mut node_map: HashMap<Uid, Node> = HashMap::new();
+				let mut locked_node_map: HashMap<Uid, &LockedNode> = HashMap::new();
+				let mut branches: HashMap<Uid, Vec<Uid>> = HashMap::new();
 
 				// put each node to a branch, if possible
 				for locked_node in locked_nodes {
@@ -369,7 +372,7 @@ impl FileSystem {
 					}
 				}
 
-				let mut to_process: Vec<u64> = node_map.keys().cloned().collect();
+				let mut to_process: Vec<Uid> = node_map.keys().cloned().collect();
 
 				while let Some(id) = to_process.pop() {
 					let mut new_nodes = Vec::new();
@@ -441,11 +444,11 @@ impl FileSystem {
 	fn parse_locked(
 		locked_nodes: &[LockedNode],
 		bundles: &Seeds,
-	) -> (HashMap<u64, Node>, HashMap<u64, Vec<u64>>, Vec<u64>) {
+	) -> (HashMap<Uid, Node>, HashMap<Uid, Vec<Uid>>, Vec<Uid>) {
 		// rebuild from self.nodes? – rathe rnot
-		let mut node_map: HashMap<u64, Node> = HashMap::new();
-		let mut locked_node_map: HashMap<u64, &LockedNode> = HashMap::new();
-		let mut branches: HashMap<u64, Vec<u64>> = HashMap::new();
+		let mut node_map: HashMap<Uid, Node> = HashMap::new();
+		let mut locked_node_map: HashMap<Uid, &LockedNode> = HashMap::new();
+		let mut branches: HashMap<Uid, Vec<Uid>> = HashMap::new();
 		let mut roots = Vec::new();
 
 		// put each node to a branch, if possible
@@ -493,7 +496,7 @@ impl FileSystem {
 			}
 		}
 
-		let mut to_process: Vec<u64> = node_map.keys().cloned().collect();
+		let mut to_process: Vec<Uid> = node_map.keys().cloned().collect();
 
 		while let Some(id) = to_process.pop() {
 			let mut new_nodes = Vec::new();
@@ -555,14 +558,14 @@ impl FileSystem {
 	}
 
 	fn build_hierarchy(
-		nodes: &mut HashMap<u64, Node>,
-		branches: &HashMap<u64, Vec<u64>>,
-		roots: &[u64],
+		nodes: &mut HashMap<Uid, Node>,
+		branches: &HashMap<Uid, Vec<Uid>>,
+		roots: &[Uid],
 	) -> Vec<Node> {
 		fn add_children_to_node(
 			node: &mut Node,
-			nodes: &mut HashMap<u64, Node>,
-			branches: &HashMap<u64, Vec<u64>>,
+			nodes: &mut HashMap<Uid, Node>,
+			branches: &HashMap<Uid, Vec<Uid>>,
 		) {
 			if let Entry::Dir { children, .. } = &mut node.entry {
 				if let Some(children_ids) = branches.get(&node.id) {
@@ -610,11 +613,11 @@ impl FileSystem {
 		}
 	}
 
-	pub fn node_by_id(&self, id: u64) -> Option<&Node> {
+	pub fn node_by_id(&self, id: Uid) -> Option<&Node> {
 		self.roots.iter().find_map(|node| self.dfs(node, id))
 	}
 
-	fn dfs<'a>(&self, node: &'a Node, id: u64) -> Option<&'a Node> {
+	fn dfs<'a>(&self, node: &'a Node, id: Uid) -> Option<&'a Node> {
 		if node.id == id {
 			return Some(node);
 		}
@@ -629,7 +632,7 @@ impl FileSystem {
 		None
 	}
 
-	pub fn node_by_id_mut(&mut self, id: u64) -> Option<&mut Node> {
+	pub fn node_by_id_mut(&mut self, id: Uid) -> Option<&mut Node> {
 		let mut stack: Vec<&mut Node> = self.roots.iter_mut().collect();
 
 		while let Some(node) = stack.pop() {
@@ -647,7 +650,7 @@ impl FileSystem {
 		None
 	}
 
-	pub fn ls_dir(&self, id: u64) -> Result<Vec<&Node>, Error> {
+	pub fn ls_dir(&self, id: Uid) -> Result<Vec<&Node>, Error> {
 		if let Some(node) = self.node_by_id(id) {
 			if let Entry::Dir { ref children, .. } = node.entry {
 				Ok(children.iter().collect())
@@ -662,10 +665,10 @@ impl FileSystem {
 	// mkdir and immediately apply its transaction
 	pub fn mkdir_mut(
 		&mut self,
-		parent_id: u64,
+		parent_id: Uid,
 		name: &str,
 		owner: &identity::Identity,
-	) -> Result<(u64, LockedNode), Error> {
+	) -> Result<(Uid, LockedNode), Error> {
 		let NewNodeReq { node, locked_node } = self.mkdir(parent_id, name, owner)?;
 		let id = self.insert_node(node)?;
 
@@ -674,7 +677,7 @@ impl FileSystem {
 
 	pub fn mkdir(
 		&self,
-		parent_id: u64,
+		parent_id: Uid,
 		name: &str,
 		owner: &identity::Identity,
 	) -> Result<NewNodeReq, Error> {
@@ -684,7 +687,7 @@ impl FileSystem {
 				seed: ref parent_seed,
 			} = node.entry
 			{
-				let id = id::generate();
+				let id = Uid::generate();
 				let new_node = Node {
 					id,
 					parent_id,
@@ -712,7 +715,7 @@ impl FileSystem {
 		}
 	}
 
-	pub fn insert_node(&mut self, node: Node) -> Result<u64, Error> {
+	pub fn insert_node(&mut self, node: Node) -> Result<Uid, Error> {
 		if let Some(parent) = self.node_by_id_mut(node.parent_id) {
 			if let Entry::Dir {
 				ref mut children,
@@ -736,11 +739,11 @@ impl FileSystem {
 	// TODO: the backend should create a PendingUpload(id); when uploaded /save/id should be called
 	pub fn touch_mut(
 		&mut self,
-		parent_id: u64,
+		parent_id: Uid,
 		name: &str,
 		ext: &str,
 		owner: &identity::Identity,
-	) -> Result<(u64, LockedNode), Error> {
+	) -> Result<(Uid, LockedNode), Error> {
 		let NewNodeReq { node, locked_node } = self.touch(parent_id, name, ext, owner)?;
 		let id = self.insert_node(node)?;
 
@@ -749,7 +752,7 @@ impl FileSystem {
 
 	pub fn touch(
 		&self,
-		parent_id: u64,
+		parent_id: Uid,
 		name: &str,
 		ext: &str,
 		owner: &identity::Identity,
@@ -760,7 +763,7 @@ impl FileSystem {
 				seed: ref parent_seed,
 			} = node.entry
 			{
-				let id = id::generate();
+				let id = Uid::generate();
 				let new_node = Node {
 					id,
 					parent_id,
@@ -768,7 +771,7 @@ impl FileSystem {
 					name: name.to_string(),
 					entry: Entry::File {
 						info: FileInfo {
-							uri_id: id::generate(),
+							uri_id: Uid::generate(),
 							key_iv: Aes::new(),
 							ext: ext.to_string(),
 						},
@@ -791,7 +794,7 @@ impl FileSystem {
 		}
 	}
 
-	pub fn share_node(&mut self, id: u64) -> Result<Seed, Error> {
+	pub fn share_node(&mut self, id: Uid) -> Result<Seed, Error> {
 		if let Some(seed) = self.cached_seeds.get(&id) {
 			Ok(seed.clone())
 		} else if let Some(node) = self.node_by_id(id) {
@@ -821,13 +824,13 @@ mod tests {
 
 	use super::*;
 
-	fn is_dir(fs: &FileSystem, id: u64, name: &str, parent: u64) -> bool {
+	fn is_dir(fs: &FileSystem, id: Uid, name: &str, parent: Uid) -> bool {
 		fs.node_by_id(id).map_or(false, |n| {
 			matches!(n.entry, Entry::Dir { .. }) && n.name == name && n.parent_id == parent
 		})
 	}
 
-	fn is_file(fs: &FileSystem, id: u64, name: &str, parent: u64) -> bool {
+	fn is_file(fs: &FileSystem, id: Uid, name: &str, parent: Uid) -> bool {
 		fs.node_by_id(id).map_or(false, |n| {
 			matches!(n.entry, Entry::File { .. }) && n.name == name && n.parent_id == parent
 		})
@@ -835,25 +838,25 @@ mod tests {
 
 	#[test]
 	fn test_create_mkdir_touch() {
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let seed = Seed::generate();
 		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
 		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
 
-		assert_eq!(fs.ls_dir(ROOT_ID).unwrap().len(), 1);
+		assert_eq!(fs.ls_dir(Uid::new(ROOT_ID)).unwrap().len(), 1);
 		assert_eq!(fs.ls_dir(_1.0).unwrap().len(), 2);
 		assert_eq!(fs.ls_dir(_1_1.0).unwrap().len(), 1);
 		assert_eq!(fs.ls_dir(_1_2.0).unwrap().len(), 0);
 		assert_eq!(fs.ls_dir(_1_1_1.0).unwrap().len(), 1);
 		assert_eq!(fs.ls_dir(_1_1_1_atxt.0), Err(Error::BadOperation));
 
-		assert!(is_dir(&fs, ROOT_ID, "/", NO_PARENT_ID));
-		assert!(is_dir(&fs, _1.0, "1", ROOT_ID));
+		assert!(is_dir(&fs, Uid::new(ROOT_ID), "/", Uid::new(NO_PARENT_ID)));
+		assert!(is_dir(&fs, _1.0, "1", Uid::new(ROOT_ID)));
 		assert!(is_dir(&fs, _1_1.0, "1_1", _1.0));
 		assert!(is_dir(&fs, _1_2.0, "1_2", _1.0));
 		assert!(is_dir(&fs, _1_1_1.0, "1_1_1", _1_1.0));
@@ -863,10 +866,10 @@ mod tests {
 	#[test]
 	fn test_from_locked_nodes_for_root() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
@@ -874,13 +877,15 @@ mod tests {
 
 		let locked_nodes = vec![root, _1.1, _1_1.1, _1_2.1, _1_1_1.1, _1_1_1_atxt.1];
 
-		let bundles = vec![(ROOT_ID, seed.clone())].into_iter().collect();
+		let bundles = vec![(Uid::new(ROOT_ID), seed.clone())]
+			.into_iter()
+			.collect();
 		let restored = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
 
 		assert_eq!(fs, restored);
 	}
 
-	fn eval_share(fs: &mut FileSystem, id: u64, parent_id: u64) -> bool {
+	fn eval_share(fs: &mut FileSystem, id: Uid, parent_id: Uid) -> bool {
 		let share = fs.share_node(id).unwrap();
 
 		matches!(fs.node_by_id(parent_id).unwrap().entry, Entry::Dir { ref seed, .. } if seed_from_parent_for_node(seed, id) == share)
@@ -889,10 +894,10 @@ mod tests {
 	#[test]
 	fn test_share_individual_nodes() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
@@ -902,12 +907,12 @@ mod tests {
 		assert!(eval_share(&mut fs, _1_1_1.0, _1_1.0));
 		assert!(eval_share(&mut fs, _1_1.0, _1.0));
 		assert!(eval_share(&mut fs, _1_2.0, _1.0));
-		assert!(eval_share(&mut fs, _1.0, ROOT_ID));
-		assert_eq!(fs.share_node(ROOT_ID), Ok(seed));
+		assert!(eval_share(&mut fs, _1.0, Uid::new(ROOT_ID)));
+		assert_eq!(fs.share_node(Uid::new(ROOT_ID)), Ok(seed));
 
 		assert!(!eval_share(&mut fs, _1_1_1_atxt.0, _1.0));
 		assert!(!eval_share(&mut fs, _1_1_1.0, _1_2.0));
-		assert!(!eval_share(&mut fs, _1_1.0, ROOT_ID));
+		assert!(!eval_share(&mut fs, _1_1.0, Uid::new(ROOT_ID)));
 		assert!(!eval_share(&mut fs, _1_2.0, _1_2.0));
 		assert!(!eval_share(&mut fs, _1.0, _1_1_1.0));
 	}
@@ -915,10 +920,10 @@ mod tests {
 	#[test]
 	fn test_share_a_file() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
@@ -940,10 +945,10 @@ mod tests {
 	#[test]
 	fn test_share_several_files_detached_as_roots() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_ctxt = fs.touch_mut(_1_1.0, "c", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -989,10 +994,10 @@ mod tests {
 	#[test]
 	fn test_share_several_dirs_detached_as_roots() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1030,11 +1035,11 @@ mod tests {
 
 	#[test]
 	fn test_share_mixed() {
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let seed = Seed::generate();
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1082,10 +1087,10 @@ mod tests {
 	#[test]
 	fn test_errors() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1098,7 +1103,7 @@ mod tests {
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
 		let _1_2_share = fs.share_node(_1_2.0).unwrap();
 
-		assert_eq!(fs.share_node(9999999), Err(Error::NotFound));
+		assert_eq!(fs.share_node(Uid::new(9999999)), Err(Error::NotFound));
 		assert_eq!(
 			fs.mkdir_mut(_1_1_1_atxt.0, "bad", &god),
 			Err(Error::BadOperation)
@@ -1146,10 +1151,10 @@ mod tests {
 	#[test]
 	fn test_update_node_with_empty_children() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1182,18 +1187,21 @@ mod tests {
 		let mut fs_copy = fs.clone();
 		assert_eq!(fs, fs_copy);
 
-		assert_eq!(fs_copy.ls_dir(ROOT_ID).unwrap().len(), 1);
-		assert_eq!(fs_copy.add_or_update_subtree(&[], ROOT_ID), Ok(()));
-		assert_eq!(fs_copy.ls_dir(ROOT_ID).unwrap().len(), 0);
+		assert_eq!(fs_copy.ls_dir(Uid::new(ROOT_ID)).unwrap().len(), 1);
+		assert_eq!(
+			fs_copy.add_or_update_subtree(&[], Uid::new(ROOT_ID)),
+			Ok(())
+		);
+		assert_eq!(fs_copy.ls_dir(Uid::new(ROOT_ID)).unwrap().len(), 0);
 	}
 
 	#[test]
 	fn test_update_node_with_new_and_existing_children() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, _) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1241,10 +1249,10 @@ mod tests {
 	#[test]
 	fn test_share_parents_and_children() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1280,7 +1288,7 @@ mod tests {
 
 		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
 
-		assert!(is_dir(&fs_partial, _1.0, "1", ROOT_ID));
+		assert!(is_dir(&fs_partial, _1.0, "1", Uid::new(ROOT_ID)));
 		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
 		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
@@ -1293,10 +1301,10 @@ mod tests {
 	#[test]
 	fn test_share_distant_relatives() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1307,7 +1315,7 @@ mod tests {
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
-		let root_share = fs.share_node(ROOT_ID).unwrap();
+		let root_share = fs.share_node(Uid::new(ROOT_ID)).unwrap();
 
 		let locked_nodes = vec![
 			root,
@@ -1323,14 +1331,19 @@ mod tests {
 		let bundles = vec![
 			(_1_1_1_atxt.0, _1_1_1_a_share),
 			(_1_1_1_btxt.0, _1_1_1_b_share),
-			(ROOT_ID, root_share),
+			(Uid::new(ROOT_ID), root_share),
 		]
 		.into_iter()
 		.collect();
 
 		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
 
-		assert!(is_dir(&fs_partial, ROOT_ID, "/", NO_PARENT_ID));
+		assert!(is_dir(
+			&fs_partial,
+			Uid::new(ROOT_ID),
+			"/",
+			Uid::new(NO_PARENT_ID)
+		));
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
 		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));
 		assert!(fs_partial
@@ -1343,11 +1356,11 @@ mod tests {
 	#[test]
 	fn test_share_root_and_children() {
 		let seed = Seed::generate();
-		let god = Identity::generate(0);
+		let god = Identity::generate(Uid::new(0));
 		let (mut fs, root) = FileSystem::new(&seed, &god);
 
-		let _1 = fs.mkdir_mut(ROOT_ID, "1", &god).unwrap();
-		let _2 = fs.mkdir_mut(ROOT_ID, "2", &god).unwrap();
+		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
+		let _2 = fs.mkdir_mut(Uid::new(ROOT_ID), "2", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
@@ -1360,7 +1373,7 @@ mod tests {
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
 		let _1_2_share = fs.share_node(_1_2.0).unwrap();
 		let _1_share = fs.share_node(_1.0).unwrap();
-		let root_share = fs.share_node(ROOT_ID).unwrap();
+		let root_share = fs.share_node(Uid::new(ROOT_ID)).unwrap();
 
 		let locked_nodes = vec![
 			root,
@@ -1377,7 +1390,7 @@ mod tests {
 		let bundles = vec![
 			(_1_1_1_atxt.0, _1_1_1_a_share),
 			(_1_1_1_btxt.0, _1_1_1_b_share),
-			(ROOT_ID, root_share),
+			(Uid::new(ROOT_ID), root_share),
 			(_1_2.0, _1_2_share),
 			(_1.0, _1_share),
 		]
@@ -1386,9 +1399,14 @@ mod tests {
 
 		let fs_partial = FileSystem::from_locked_nodes(&locked_nodes, &bundles);
 
-		assert!(is_dir(&fs_partial, ROOT_ID, "/", NO_PARENT_ID));
-		assert!(is_dir(&fs_partial, _1.0, "1", ROOT_ID));
-		assert!(is_dir(&fs_partial, _2.0, "2", ROOT_ID));
+		assert!(is_dir(
+			&fs_partial,
+			Uid::new(ROOT_ID),
+			"/",
+			Uid::new(NO_PARENT_ID)
+		));
+		assert!(is_dir(&fs_partial, _1.0, "1", Uid::new(ROOT_ID)));
+		assert!(is_dir(&fs_partial, _2.0, "2", Uid::new(ROOT_ID)));
 		assert!(is_dir(&fs_partial, _1_2.0, "1_2", _1.0));
 		assert!(is_file(&fs_partial, _1_1_1_atxt.0, "a", _1_1_1.0));
 		assert!(is_file(&fs_partial, _1_1_1_btxt.0, "b", _1_1_1.0));

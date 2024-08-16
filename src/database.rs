@@ -1,5 +1,6 @@
 use crate::{
-	hkdf, id,
+	hkdf,
+	id::Uid,
 	salt::Salt,
 	seeds::{self, Seed, Seeds},
 };
@@ -22,7 +23,7 @@ pub enum Index {
 }
 
 impl Index {
-	pub fn as_id(&self) -> u64 {
+	pub fn as_id(&self) -> Uid {
 		match self {
 			Index::Table { table } => id_for_table(table),
 			Index::Column { table, column } => id_for_column(table, column),
@@ -31,13 +32,13 @@ impl Index {
 }
 
 pub trait SeedById {
-	fn seed_by_id<F>(&self, id: u64, derive_fn: F) -> Option<Seed>
+	fn seed_by_id<F>(&self, id: Uid, derive_fn: F) -> Option<Seed>
 	where
 		F: Fn(&Seed) -> Seed;
 }
 
 impl SeedById for Vec<Seeds> {
-	fn seed_by_id<F>(&self, id: u64, derive: F) -> Option<Seed>
+	fn seed_by_id<F>(&self, id: Uid, derive: F) -> Option<Seed>
 	where
 		F: Fn(&Seed) -> Seed,
 	{
@@ -89,12 +90,12 @@ pub fn derive_column_seed_from_root(root: &Seed, table_name: &str, column_name: 
 	derive_column_seed_from_table(&table, column_name)
 }
 
-pub fn id_for_column(table: &str, column: &str) -> u64 {
-	id::from_bytes(&[table.as_bytes(), b"-", column.as_bytes()].concat())
+pub fn id_for_column(table: &str, column: &str) -> Uid {
+	Uid::from_bytes(&[table.as_bytes(), b"-", column.as_bytes()].concat())
 }
 
-pub fn id_for_table(table: &str) -> u64 {
-	id::from_bytes(table.as_bytes())
+pub fn id_for_table(table: &str) -> Uid {
+	Uid::from_bytes(table.as_bytes())
 }
 
 #[cfg(test)]

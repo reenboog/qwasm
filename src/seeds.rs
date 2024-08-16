@@ -6,7 +6,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
 	base64_blobs::{deserialize_array_base64, serialize_array_base64},
-	ed448, hmac, identity, password_lock,
+	ed448, hmac,
+	id::Uid,
+	identity, password_lock,
 	vault::LockedNode,
 };
 
@@ -42,10 +44,10 @@ pub struct Import {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Export {
 	// no sig is required here; validate LockedShare instead
-	pub(crate) receiver: u64,
+	pub(crate) receiver: Uid,
 	// these are ids of the exported seeds
-	pub(crate) fs: Vec<u64>,
-	pub(crate) db: Vec<u64>,
+	pub(crate) fs: Vec<Uid>,
+	pub(crate) db: Vec<Uid>,
 }
 
 pub trait Sorted {
@@ -65,7 +67,7 @@ impl<T: Ord + Clone> Sorted for Vec<T> {
 }
 
 impl Export {
-	pub fn from_bundle(bundle: &Bundle, receiver_id: u64) -> Self {
+	pub fn from_bundle(bundle: &Bundle, receiver_id: Uid) -> Self {
 		Self {
 			receiver: receiver_id,
 			fs: bundle.fs.keys().cloned().collect(),
@@ -80,19 +82,15 @@ impl Export {
 			.sorted()
 			.iter()
 			.chain(self.db.sorted().iter())
-			.flat_map(|k| [k.to_be_bytes()].concat())
+			.flat_map(|k| [k.as_bytes()].concat())
 			.collect::<Vec<_>>();
-		let sha = Sha256::digest([&bytes, self.receiver.to_be_bytes().as_slice()].concat());
+		let sha = Sha256::digest([&bytes, self.receiver.as_bytes().as_slice()].concat());
 
 		hmac::Digest(sha.into())
 	}
 }
 pub(crate) fn ctx_to_sign(sender: &identity::Public, export: &Export) -> Vec<u8> {
-	[
-		sender.id().to_be_bytes().as_slice(),
-		export.hash().as_bytes(),
-	]
-	.concat()
+	[sender.id().as_bytes().as_slice(), export.hash().as_bytes()].concat()
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -109,7 +107,7 @@ pub struct LockedShare {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Invite {
-	pub(crate) user_id: u64,
+	pub(crate) user_id: Uid,
 	// pin needs to be shared through a trusted channel, so no need to sign
 	pub(crate) sender: identity::Public,
 	pub(crate) email: String,
@@ -122,7 +120,7 @@ pub struct Invite {
 
 #[derive(Serialize, Deserialize)]
 pub struct Welcome {
-	pub(crate) user_id: u64,
+	pub(crate) user_id: Uid,
 	pub(crate) sender: identity::Public,
 	// email?
 	pub(crate) imports: password_lock::Lock,
@@ -132,7 +130,7 @@ pub struct Welcome {
 	pub(crate) nodes: Vec<LockedNode>,
 }
 
-pub type Seeds = HashMap<u64, Seed>;
+pub type Seeds = HashMap<Uid, Seed>;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Bundle {
@@ -158,11 +156,11 @@ impl Bundle {
 		}
 	}
 
-	pub fn set_fs(&mut self, id: u64, seed: Seed) {
+	pub fn set_fs(&mut self, id: Uid, seed: Seed) {
 		self.fs.insert(id, seed);
 	}
 
-	pub fn set_db(&mut self, id: u64, seed: Seed) {
+	pub fn set_db(&mut self, id: Uid, seed: Seed) {
 		self.db.insert(id, seed);
 	}
 }

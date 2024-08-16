@@ -1,5 +1,6 @@
 use crate::{
 	encrypted,
+	id::Uid,
 	protocol::{Error, Network},
 	register::LockedUser,
 	seeds::{Invite, Seed, Welcome},
@@ -111,9 +112,9 @@ impl Network for JsNet {
 		Ok(locked_user)
 	}
 
-	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error> {
+	async fn fetch_subtree(&self, id: Uid) -> Result<Vec<LockedNode>, Error> {
 		let this = JsValue::NULL;
-		let id = JsValue::from(id.to_string());
+		let id = JsValue::from(&id.to_base64());
 		let promise = self
 			.fetch_subtree
 			.call1(&this, &id)
@@ -140,9 +141,9 @@ impl Network for JsNet {
 		Ok(())
 	}
 
-	async fn get_master_key(&self, user_id: u64) -> Result<encrypted::Encrypted, Error> {
+	async fn get_master_key(&self, user_id: Uid) -> Result<encrypted::Encrypted, Error> {
 		let this = JsValue::NULL;
-		let user_id = JsValue::from(user_id.to_string());
+		let user_id = JsValue::from(&user_id.to_base64());
 		let promise = self
 			.get_mk
 			.call1(&this, &user_id)
@@ -155,9 +156,9 @@ impl Network for JsNet {
 		Ok(mk)
 	}
 
-	async fn get_user(&self, id: u64) -> Result<LockedUser, Error> {
+	async fn get_user(&self, id: Uid) -> Result<LockedUser, Error> {
 		let this = JsValue::NULL;
-		let user_id = JsValue::from(id.to_string());
+		let user_id = JsValue::from(&id.to_base64());
 		let promise = self
 			.get_user
 			.call1(&this, &user_id)
@@ -172,7 +173,7 @@ impl Network for JsNet {
 
 	async fn get_invite(&self, email: &str) -> Result<Welcome, Error> {
 		let this = JsValue::NULL;
-		// base64 is used to avoid invalid paths, eg GET /invite/alex@mode.io
+		// IMPORTANT: base64-encoded to avoid invalid paths, eg GET /invite/alex@mode.io
 		let email = base64::encode_config(email, base64::URL_SAFE);
 		let email = JsValue::from(email);
 		let promise = self
@@ -201,10 +202,9 @@ impl Network for JsNet {
 		Ok(())
 	}
 
-	// TODO: probably pass user_id as well
-	async fn lock_session(&self, token_id: &str, token: &Seed) -> Result<(), Error> {
+	async fn lock_session(&self, token_id: Uid, token: &Seed) -> Result<(), Error> {
 		let this = JsValue::NULL;
-		let token_id = JsValue::from(token_id);
+		let token_id = JsValue::from(&token_id.to_base64());
 		let token = JsValue::from(serde_json::to_string(&token).unwrap());
 		let promise = self
 			.lock_session
@@ -217,9 +217,9 @@ impl Network for JsNet {
 		Ok(())
 	}
 
-	async fn unlock_session(&self, token_id: &str) -> Result<Seed, Error> {
+	async fn unlock_session(&self, token_id: Uid) -> Result<Seed, Error> {
 		let this = JsValue::NULL;
-		let token_id = JsValue::from(token_id);
+		let token_id = JsValue::from(&token_id.to_base64());
 		let promise = self
 			.unlock_session
 			.call1(&this, &token_id)
@@ -234,10 +234,10 @@ impl Network for JsNet {
 
 	async fn start_passkey_registration(
 		&self,
-		user_id: u64,
+		user_id: Uid,
 	) -> Result<webauthn::Registration, Error> {
 		let this = JsValue::NULL;
-		let user_id = JsValue::from(user_id.to_string());
+		let user_id = JsValue::from(&user_id.to_base64());
 		let promise = self
 			.start_passkey_registration
 			.call1(&this, &user_id)
@@ -253,11 +253,11 @@ impl Network for JsNet {
 
 	async fn finish_passkey_registration(
 		&self,
-		user_id: u64,
+		user_id: Uid,
 		bundle: &webauthn::Bundle,
 	) -> Result<(), Error> {
 		let this = JsValue::NULL;
-		let user_id = JsValue::from(user_id.to_string());
+		let user_id = JsValue::from(&user_id.to_base64());
 		let bundle = JsValue::from(serde_json::to_string(&bundle).unwrap());
 		let promise = self
 			.finish_passkey_registration
@@ -287,11 +287,11 @@ impl Network for JsNet {
 
 	async fn finish_passkey_auth(
 		&self,
-		auth_id: u64,
+		auth_id: Uid,
 		auth: webauthn::Authentication,
 	) -> Result<webauthn::Passkey, Error> {
 		let this = JsValue::NULL;
-		let auth_id = JsValue::from(auth_id.to_string());
+		let auth_id = JsValue::from(&auth_id.to_base64());
 		let auth = JsValue::from(serde_json::to_string(&auth).unwrap());
 		let promise = self
 			.finish_passkey_auth

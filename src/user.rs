@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
 	aes_gcm,
 	database::{self, SeedById},
-	encrypted, hkdf, id,
+	encrypted, hkdf,
+	id::{self, Uid},
 	identity::{self, Identity},
 	password_lock,
 	register::LockedUser,
@@ -58,7 +59,7 @@ impl User {
 	// None means `all available`
 	fn seeds_for_ids(
 		&mut self,
-		fs_ids: Option<&[u64]>,
+		fs_ids: Option<&[Uid]>,
 		db_ids: Option<&[database::Index]>,
 	) -> Bundle {
 		let mut bundle = Bundle::new();
@@ -75,7 +76,7 @@ impl User {
 		} else {
 			// if multi-space is ever considered, export imports as well
 			if self.is_god() {
-				bundle.set_fs(ROOT_ID, Self::fs_seed(identity));
+				bundle.set_fs(Uid::new(ROOT_ID), Self::fs_seed(identity));
 			} else {
 				// share all existing imports
 				self.imports
@@ -122,7 +123,7 @@ impl User {
 					} else {
 						match idx {
 							database::Index::Table { table } => {
-								if let Some(db_seed) = imports.get(&ROOT_ID) {
+								if let Some(db_seed) = imports.get(&Uid::new(ROOT_ID)) {
 									bundle.set_db(
 										id,
 										database::derive_table_seed_from_root(db_seed, table),
@@ -137,7 +138,7 @@ impl User {
 										id,
 										database::derive_column_seed_from_table(table_seed, column),
 									);
-								} else if let Some(db_seed) = imports.get(&ROOT_ID) {
+								} else if let Some(db_seed) = imports.get(&Uid::new(ROOT_ID)) {
 									bundle.set_db(
 										id,
 										database::derive_column_seed_from_root(
@@ -152,7 +153,7 @@ impl User {
 			}
 		} else {
 			if self.is_god() {
-				bundle.set_db(ROOT_ID, Self::db_seed(identity));
+				bundle.set_db(Uid::new(ROOT_ID), Self::db_seed(identity));
 			} else {
 				self.imports
 					.iter()
@@ -196,13 +197,13 @@ impl User {
 		&mut self,
 		email: &str,
 		pin: &str,
-		fs_ids: Option<&[u64]>,
+		fs_ids: Option<&[Uid]>,
 		db_ids: Option<&[database::Index]>,
 	) -> Invite {
 		let bundle = self.seeds_for_ids(fs_ids, db_ids);
 		let payload = password_lock::lock(&bundle, pin).unwrap();
 
-		let receiver_id = id::generate();
+		let receiver_id = Uid::generate();
 		let export = Export::from_bundle(&bundle, receiver_id);
 		let sig = self
 			.identity
@@ -270,7 +271,7 @@ impl User {
 				database::derive_entry_seed_from_table(s, column, &salt)
 			}) {
 			Ok(seed_from_table)
-		} else if let Some(seed_from_root) = bundles.seed_by_id(ROOT_ID, |s| {
+		} else if let Some(seed_from_root) = bundles.seed_by_id(Uid::new(ROOT_ID), |s| {
 			// do I have a root seed?
 			database::derive_entry_seed_from_root(s, table, column, &salt)
 		}) {
@@ -392,7 +393,9 @@ pub fn unlock_with_master_key(locked: &LockedUser, mk: &aes_gcm::Aes) -> Result<
 		.collect();
 
 	let bundles = if locked.is_god() {
-		[(ROOT_ID, User::fs_seed(&_priv))].into_iter().collect()
+		[(Uid::new(ROOT_ID), User::fs_seed(&_priv))]
+			.into_iter()
+			.collect()
 	} else {
 		imports.iter().flat_map(|im| im.bundle.fs.clone()).collect()
 	};
@@ -422,8 +425,9 @@ mod tests {
 
 	use crate::{
 		database,
+		id::Uid,
 		register::{signup_as_admin, signup_as_god, NewUser},
-		seeds::{Invite, Welcome, ROOT_ID},
+		seeds::{Welcome, ROOT_ID},
 		user::{unlock_with_pass, User},
 	};
 
@@ -502,7 +506,7 @@ mod tests {
 			.collect::<HashMap<_, _>>();
 		assert_eq!(db_seeds.len(), 1);
 		assert_eq!(
-			db_seeds.get(&ROOT_ID),
+			db_seeds.get(&Uid::new(ROOT_ID)),
 			Some(&User::db_seed(god.identity.private()))
 		);
 
@@ -553,7 +557,7 @@ mod tests {
 			.flat_map(|im| im.bundle.db.clone())
 			.collect::<HashMap<_, _>>();
 		assert_eq!(db_seeds.len(), 4);
-		assert_eq!(db_seeds.get(&ROOT_ID), None,);
+		assert_eq!(db_seeds.get(&Uid::new(ROOT_ID)), None,);
 		vec![
 			idx_users,
 			idx_companies.clone(),

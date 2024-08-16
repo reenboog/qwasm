@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
 	ed448,
+	id::Uid,
 	identity::{self},
 	password_lock,
 	seeds::{self, Bundle, Export, Import, LockedShare, Welcome},
@@ -32,7 +33,7 @@ pub struct LockedUser {
 }
 
 impl LockedUser {
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> Uid {
 		self._pub.id()
 	}
 
@@ -51,7 +52,7 @@ pub struct NewUser {
 
 // registration to upload (encrypted & encoded)
 pub(crate) fn signup_as_god(pass: &str) -> Result<NewUser, Error> {
-	let identity = identity::Identity::generate(user::GOD_ID);
+	let identity = identity::Identity::generate(Uid::new(user::GOD_ID));
 	let (fs, root) = FileSystem::new(&User::fs_seed(identity.private()), &identity);
 
 	signup_with_params(pass, identity, None, fs, vec![root])

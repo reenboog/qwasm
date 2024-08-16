@@ -1,10 +1,10 @@
-use crate::{id, key::key};
+use crate::{id::Uid, key::key};
 
 key!(PublicKey);
 
 impl<T, const SIZE: usize> PublicKey<T, SIZE> {
-	pub fn id(&self) -> u64 {
-		id::from_bytes(&self.bytes)
+	pub fn id(&self) -> Uid {
+		Uid::from_bytes(&self.bytes)
 	}
 }
 

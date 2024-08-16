@@ -1,7 +1,6 @@
 pub mod base64_blobs;
 pub mod database;
 pub mod ed448;
-pub mod events;
 pub mod hkdf;
 pub mod hmac;
 pub mod identity;

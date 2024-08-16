@@ -552,7 +552,6 @@ dependencies = [
  "base64 0.13.1",
  "ed448-rust",
  "getrandom",
- "hex",
  "hmac",
  "js-sys",
  "rand",

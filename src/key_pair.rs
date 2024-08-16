@@ -1,12 +1,5 @@
-use crate::{private_key::PrivateKey, public_key::PublicKey};
+use crate::{id::Uid, private_key::PrivateKey, public_key::PublicKey};
 use serde::{Deserialize, Serialize};
-
-// #[derive(Debug, PartialEq)]
-// pub enum Error {
-// 	WrongPrivKeyLen,
-// 	WrongPubKeyLen,
-// 	BadFormat,
-// }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound(
@@ -31,7 +24,7 @@ impl<T, const PRIV_SIZE: usize, const PUB_SIZE: usize> KeyPair<T, PRIV_SIZE, PUB
 		&self.private
 	}
 
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> Uid {
 		self.public_key().id()
 	}
 }

@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use js_sys::Uint8Array;
@@ -6,6 +8,7 @@ use web_sys::window;
 
 use crate::{
 	aes_gcm, encrypted,
+	id::Uid,
 	js_net::JsNet,
 	password_lock,
 	register::{self, LockedUser, NewUser},
@@ -111,10 +114,12 @@ impl DirView {
 #[wasm_bindgen]
 #[derive(Clone)]
 pub struct NodeView {
-	id: u64,
+	id: Uid,
 	created_at: u64,
 	name: String,
 	ext: Option<String>,
+	// FIXME: expose size
+	// FIXME: expose uri_id
 }
 
 #[wasm_bindgen]
@@ -123,7 +128,7 @@ impl NodeView {
 		self.ext.is_none()
 	}
 
-	pub fn id(&self) -> u64 {
+	pub fn id(&self) -> Uid {
 		self.id
 	}
 
@@ -140,33 +145,32 @@ impl NodeView {
 	}
 }
 
-// #[async_trait]
 #[async_trait(?Send)]
 pub(crate) trait Network {
 	async fn signup(&self, signup: user::Signup) -> Result<(), Error>;
 	async fn login(&self, login: user::Login) -> Result<LockedUser, Error>;
-	async fn fetch_subtree(&self, id: u64) -> Result<Vec<LockedNode>, Error>;
+	async fn fetch_subtree(&self, id: Uid) -> Result<Vec<LockedNode>, Error>;
 	// the backend may mark these uploads as pending at first and as complete when all data has been transmitted
 	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error>;
 	async fn get_invite(&self, email: &str) -> Result<Welcome, Error>;
 	async fn invite(&self, invite: &Invite) -> Result<(), Error>;
-	async fn get_user(&self, id: u64) -> Result<LockedUser, Error>;
-	async fn get_master_key(&self, user_id: u64) -> Result<encrypted::Encrypted, Error>;
-	async fn lock_session(&self, token_id: &str, token: &Seed) -> Result<(), Error>;
-	async fn unlock_session(&self, token_id: &str) -> Result<Seed, Error>;
+	async fn get_user(&self, id: Uid) -> Result<LockedUser, Error>;
+	async fn get_master_key(&self, user_id: Uid) -> Result<encrypted::Encrypted, Error>;
+	async fn lock_session(&self, token_id: Uid, token: &Seed) -> Result<(), Error>;
+	async fn unlock_session(&self, token_id: Uid) -> Result<Seed, Error>;
 	async fn start_passkey_registration(
 		&self,
-		user_id: u64,
+		user_id: Uid,
 	) -> Result<webauthn::Registration, Error>;
 	async fn finish_passkey_registration(
 		&self,
-		user_id: u64,
+		user_id: Uid,
 		bundle: &webauthn::Bundle,
 	) -> Result<(), Error>;
 	async fn start_passkey_auth(&self) -> Result<webauthn::AuthChallenge, Error>;
 	async fn finish_passkey_auth(
 		&self,
-		auth_id: u64,
+		auth_id: Uid,
 		auth: webauthn::Authentication,
 	) -> Result<webauthn::Passkey, Error>;
 }
@@ -213,13 +217,11 @@ impl Storage {
 #[wasm_bindgen]
 pub struct Protocol {
 	// current directory
-	cd: Option<u64>,
+	cd: Option<Uid>,
 	user: User,
-
 	// callbacks
 	net: Box<dyn Network>,
 	storage: Storage,
-	// keep the caches and all that here?
 }
 
 impl From<Node> for NodeView {
@@ -255,7 +257,7 @@ impl TryFrom<Node> for DirView {
 			Ok(DirView {
 				items,
 				name: dir.name,
-				breadcrumbs: Vec::new(), // TODO: fill in; nope, I need the whole tree
+				breadcrumbs: Vec::new(),
 			})
 		} else {
 			Err(Error::BadOperation)
@@ -327,8 +329,8 @@ impl Protocol {
 				.await
 				.map_err(|_| Error::NoSession)?
 			{
-				let user_id: u64 = serde_json::from_str(&user_id).map_err(|_| Error::NoSession)?;
-				let token = net.unlock_session(&envelope.token_id).await?;
+				let user_id = Uid::from_str(&user_id).map_err(|_| Error::NoSession)?;
+				let token = net.unlock_session(envelope.token_id).await?;
 				let user = net.get_user(user_id).await?;
 				let mk =
 					session::unlock(envelope.encrypted_mk, token).map_err(|_| Error::NoSession)?;
@@ -499,11 +501,11 @@ impl Protocol {
 		let to_lock = session::lock(&mk);
 
 		self.net
-			.lock_session(&to_lock.locked.token_id, &to_lock.token)
+			.lock_session(to_lock.locked.token_id, &to_lock.token)
 			.await?;
 
 		let envelope = serde_json::to_string(&to_lock.locked).unwrap();
-		let user_id = serde_json::to_string(&self.user.identity.id()).unwrap();
+		let user_id = &self.user.identity.id().to_base64();
 
 		self.storage.set_item(ID_ENVELOPE, &envelope).await.unwrap();
 		self.storage.set_item(ID_USERID, &user_id).await.unwrap();
@@ -528,7 +530,7 @@ impl Protocol {
 			rp_id,
 			name,
 			name,
-			&user_id.to_be_bytes(), // FIXME: when type is changed, use .as_bytes()
+			&user_id.as_bytes(),
 			&reg,
 			key_name,
 		)
@@ -626,7 +628,7 @@ impl Protocol {
 							ext: None,
 						});
 
-						cur = cur_node.map_or(NO_PARENT_ID, |n| n.parent_id);
+						cur = cur_node.map_or(Uid::new(NO_PARENT_ID), |n| n.parent_id);
 					}
 
 					breadcrumbs.reverse();
@@ -647,8 +649,8 @@ impl Protocol {
 
 	async fn cd_to_root(&mut self) -> DirView {
 		// TODO: this should not be await and hard unwrapping
-		if let Some(_) = self.user.fs.node_by_id(ROOT_ID) {
-			self.cd_to_dir(ROOT_ID).await.unwrap()
+		if let Some(_) = self.user.fs.node_by_id(Uid::new(ROOT_ID)) {
+			self.cd_to_dir(&Uid::new(ROOT_ID)).await.unwrap()
 		} else {
 			self.cd = None;
 
@@ -671,7 +673,8 @@ impl Protocol {
 	pub async fn go_back(&mut self) -> Result<DirView, Error> {
 		if let Some(cd) = self.cd {
 			if let Some(node) = self.user.fs.node_by_id(cd) {
-				self.cd_to_dir(node.parent_id).await
+				let parent_id = node.parent_id;
+				self.cd_to_dir(&parent_id).await
 			} else {
 				Ok(self.cd_to_root().await)
 			}
@@ -680,13 +683,13 @@ impl Protocol {
 		}
 	}
 
-	pub async fn cd_to_dir(&mut self, id: u64) -> Result<DirView, Error> {
-		self.cd = Some(id);
+	pub async fn cd_to_dir(&mut self, id: &Uid) -> Result<DirView, Error> {
+		self.cd = Some(*id);
 
 		self.ls_cur_mut_impl().await
 	}
 
-	pub async fn mkdir(&mut self, name: &str) -> Result<u64, Error> {
+	pub async fn mkdir(&mut self, name: &str) -> Result<Uid, Error> {
 		if let Some(cd) = self.cd {
 			let NewNodeReq { node, locked_node } =
 				self.user.fs.mkdir(cd, name, &self.user.identity)?;
@@ -701,7 +704,7 @@ impl Protocol {
 		}
 	}
 
-	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<u64, Error> {
+	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<Uid, Error> {
 		if let Some(cd) = self.cd {
 			let NewNodeReq { node, locked_node } =
 				self.user.fs.touch(cd, name, ext, &self.user.identity)?;
@@ -715,9 +718,8 @@ impl Protocol {
 		}
 	}
 
-	// for streaming, I need a mutable opaque object (aes basically)
-	pub async fn encrypt_block_for_file(&self, pt: &[u8], id: u64) -> Result<Uint8Array, Error> {
-		if let Some(node) = self.user.fs.node_by_id(id) {
+	pub async fn encrypt_block_for_file(&self, pt: &[u8], id: &Uid) -> Result<Uint8Array, Error> {
+		if let Some(node) = self.user.fs.node_by_id(*id) {
 			if let vault::Entry::File { ref info } = node.entry {
 				let ct = info.key_iv.encrypt_async(pt).await;
 
@@ -733,10 +735,10 @@ impl Protocol {
 	pub async fn chunk_encrypt_for_file(
 		&self,
 		chunk: &[u8],
-		file_id: u64,
+		file_id: &Uid,
 		chunk_idx: u32,
 	) -> Result<Uint8Array, Error> {
-		if let Some(node) = self.user.fs.node_by_id(file_id) {
+		if let Some(node) = self.user.fs.node_by_id(*file_id) {
 			if let vault::Entry::File { ref info } = node.entry {
 				let ct = info.key_iv.chunk_encrypt_async(chunk_idx, chunk).await;
 
@@ -749,8 +751,8 @@ impl Protocol {
 		}
 	}
 
-	pub async fn decrypt_block_for_file(&self, ct: &[u8], id: u64) -> Result<Uint8Array, Error> {
-		if let Some(node) = self.user.fs.node_by_id(id) {
+	pub async fn decrypt_block_for_file(&self, ct: &[u8], id: &Uid) -> Result<Uint8Array, Error> {
+		if let Some(node) = self.user.fs.node_by_id(*id) {
 			if let vault::Entry::File { ref info } = node.entry {
 				let pt = info
 					.key_iv
@@ -770,10 +772,10 @@ impl Protocol {
 	pub async fn chunk_decrypt_for_file(
 		&self,
 		chunk: &[u8],
-		file_id: u64,
+		file_id: &Uid,
 		chunk_idx: u32,
 	) -> Result<Uint8Array, Error> {
-		if let Some(node) = self.user.fs.node_by_id(file_id) {
+		if let Some(node) = self.user.fs.node_by_id(*file_id) {
 			if let vault::Entry::File { ref info } = node.entry {
 				let pt = info
 					.key_iv
