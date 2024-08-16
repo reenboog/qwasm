@@ -281,6 +281,7 @@ pub async fn authenticate(
 pub async fn derive_prf_output(
 	ch: &Salt,
 	cred_id: &CredentialId,
+	rp_id: &str,
 	prf_salt: &Salt,
 ) -> Result<PrfOutput, Error> {
 	let challenge_array = Uint8Array::from(ch.bytes.as_slice());
@@ -302,6 +303,7 @@ pub async fn derive_prf_output(
 	public_key_options.set_allow_credentials(&allow_credentials);
 	public_key_options.set_extensions(&ext_inputs);
 	public_key_options.set_user_verification(UserVerificationRequirement::Discouraged);
+	public_key_options.set_rp_id(rp_id);
 
 	let credential_request_options = CredentialRequestOptions::new();
 	credential_request_options.set_public_key(&public_key_options);

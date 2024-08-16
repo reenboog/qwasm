@@ -537,7 +537,7 @@ impl Protocol {
 		.await
 		.map_err(|_| Error::JsViolated)?;
 
-		let prf_output = webauthn::derive_prf_output(&reg.challenge, &cred.id, &reg.prf_salt)
+		let prf_output = webauthn::derive_prf_output(&reg.challenge, &cred.id, rp_id, &reg.prf_salt)
 			.await
 			.map_err(|_| Error::NoWebauthnPrfSupport)?;
 
@@ -566,7 +566,7 @@ impl Protocol {
 		let prf_output = if let Some(prf_output) = auth.1 {
 			prf_output
 		} else {
-			webauthn::derive_prf_output(&challenge.challenge, &passkey.id, &passkey.prf_salt)
+			webauthn::derive_prf_output(&challenge.challenge, &passkey.id, rp_id, &passkey.prf_salt)
 				.await
 				.map_err(|_| Error::JsViolated)?
 		};
