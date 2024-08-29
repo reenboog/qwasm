@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use crate::{
 	aes_gcm,
 	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
-	ed448::{KeyPairEd448, PrivateKeyEd448, PublicKeyEd448, Signature},
+	ed25519::{KeyPairEd25519, PrivateKeyEd25519, PublicKeyEd25519, Signature},
 	hkdf, hmac,
 	id::Uid,
 	x448::{dh_exchange, KeyPairX448, PrivateKeyX448, PublicKeyX448},
@@ -20,7 +20,7 @@ pub struct Identity {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Private {
 	pub(crate) x448: PrivateKeyX448,
-	pub(crate) ed448: PrivateKeyEd448,
+	pub(crate) ed448: PrivateKeyEd25519,
 }
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ pub struct Public {
 	pub(crate) id: Uid,
 	// can be used to encrypt messages to or verify signatures against
 	pub(crate) x448: PublicKeyX448,
-	pub(crate) ed448: PublicKeyEd448,
+	pub(crate) ed448: PublicKeyEd25519,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -126,10 +126,10 @@ impl Identity {
 			private: x448_priv,
 			public: x448_pub,
 		} = KeyPairX448::generate();
-		let KeyPairEd448 {
+		let KeyPairEd25519 {
 			private: ed448_priv,
 			public: ed448_pub,
-		} = KeyPairEd448::generate();
+		} = KeyPairEd25519::generate();
 
 		Self {
 			_priv: Private {

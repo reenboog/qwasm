@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
 	base64_blobs::{deserialize_array_base64, serialize_array_base64},
-	ed448, hmac,
+	ed25519, hmac,
 	id::Uid,
 	identity, password_lock,
 	vault::LockedNode,
@@ -102,7 +102,7 @@ pub struct LockedShare {
 	// encrypted content of the sahre
 	pub(crate) payload: identity::Encrypted,
 	// sign({ sender, exports })
-	pub(crate) sig: ed448::Signature,
+	pub(crate) sig: ed25519::Signature,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -115,7 +115,7 @@ pub struct Invite {
 	pub(crate) payload: password_lock::Lock,
 	pub(crate) export: Export,
 	// sign({ sender, exports })
-	pub(crate) sig: ed448::Signature,
+	pub(crate) sig: ed25519::Signature,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -125,7 +125,7 @@ pub struct Welcome {
 	// email?
 	pub(crate) imports: password_lock::Lock,
 	// = Invite::sig
-	pub(crate) sig: ed448::Signature,
+	pub(crate) sig: ed25519::Signature,
 	// TODO: get_nodes(invite.export.fs.ids)
 	pub(crate) nodes: Vec<LockedNode>,
 }

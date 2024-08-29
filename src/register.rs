@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-	ed448,
+	ed25519,
 	id::Uid,
 	identity::{self},
 	password_lock,
@@ -80,7 +80,7 @@ pub(crate) fn signup_as_admin(pass: &str, welcome: &Welcome, pin: &str) -> Resul
 fn signup_with_params(
 	pass: &str,
 	identity: identity::Identity,
-	import: Option<(Import, ed448::Signature)>,
+	import: Option<(Import, ed25519::Signature)>,
 	fs: FileSystem,
 	nodes_to_upload: Vec<LockedNode>,
 ) -> Result<NewUser, Error> {

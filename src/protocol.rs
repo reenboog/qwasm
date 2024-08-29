@@ -537,9 +537,10 @@ impl Protocol {
 		.await
 		.map_err(|_| Error::JsViolated)?;
 
-		let prf_output = webauthn::derive_prf_output(&reg.challenge, &cred.id, rp_id, &reg.prf_salt)
-			.await
-			.map_err(|_| Error::NoWebauthnPrfSupport)?;
+		let prf_output =
+			webauthn::derive_prf_output(&reg.challenge, &cred.id, rp_id, &reg.prf_salt)
+				.await
+				.map_err(|_| Error::NoWebauthnPrfSupport)?;
 
 		let mk = self.net.get_master_key(user_id).await?;
 		let mk = password_lock::decrypt_master_key(&mk, pass).map_err(|_| Error::WrongPass)?;

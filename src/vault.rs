@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
 	aes_gcm::{self, Aes},
-	ed448,
+	ed25519,
 	encrypted::Encrypted,
 	hkdf::Hkdf,
 	hmac,
@@ -77,7 +77,7 @@ struct LockedContent {
 	// keep a chain between sig and last_edited sig?
 	// TODO: intorduce a list of edits?
 	// edit: { editerd_by, edited_at, sig }
-	sig: ed448::Signature,
+	sig: ed25519::Signature,
 	entry: LockedEntry,
 }
 
