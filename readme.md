@@ -1,3 +1,10 @@
+#To build ring aes on mac:
+brew install llvm
+echo 'export PATH="/opt/homebrew/opt/llvm/bin:$PATH"' >> ~/.zshrc
+
+don't forget to source ~/.zshrc
+
+
 // TODO: remove unused Serialized/Deserialized
 // TODO: use web_sys for storage and network?
 // FIXME: when dealing with bundles, don't forget about God who has none

@@ -1,10 +1,9 @@
 use crate::base64_blobs::{deserialize_array_base64, serialize_array_base64};
-use aes_gcm::{
-	aead::{generic_array::GenericArray, Aead, NewAead},
-	Aes256Gcm,
-};
 use rand::rngs::OsRng;
 use rand::RngCore;
+use ring::aead::{
+	Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey, AES_256_GCM,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::hkdf;
@@ -55,6 +54,12 @@ impl Iv {
 
 	pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
 		&self.bytes
+	}
+}
+
+impl NonceSequence for Iv {
+	fn advance(&mut self) -> Result<Nonce, ring::error::Unspecified> {
+		Nonce::try_assume_unique_for_key(&self.bytes)
 	}
 }
 
@@ -205,9 +210,15 @@ impl Aes {
 	}
 
 	pub fn encrypt(&self, pt: &[u8]) -> Vec<u8> {
-		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.bytes));
-		let nonce = GenericArray::from_slice(&self.iv.bytes);
-		cipher.encrypt(nonce, pt).unwrap()
+		let mut ct = pt.to_vec();
+		let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes()).unwrap();
+		let mut sealing_key = SealingKey::new(unbound_key, self.iv);
+
+		sealing_key
+			.seal_in_place_append_tag(Aad::empty(), &mut ct)
+			.unwrap();
+
+		ct
 	}
 
 	pub fn encrypt_serializable<T>(&self, pt: T) -> Vec<u8>
@@ -220,11 +231,15 @@ impl Aes {
 	}
 
 	pub fn decrypt(&self, ct: &[u8]) -> Result<Vec<u8>, Error> {
-		let cipher = Aes256Gcm::new(GenericArray::from_slice(&self.key.bytes));
-		let nonce = GenericArray::from_slice(&self.iv.bytes);
-		cipher
-			.decrypt(nonce, ct)
-			.map_err(|_| Error::WrongKeyMaterial)
+		let mut ct = ct.to_vec();
+		let unbound_key = UnboundKey::new(&AES_256_GCM, self.key.as_bytes()).unwrap();
+		let mut opening_key = OpeningKey::new(unbound_key, self.iv);
+
+		let r = opening_key
+			.open_in_place(Aad::empty(), &mut ct)
+			.or(Err(Error::WrongKeyMaterial))?;
+
+		Ok(r.to_vec())
 	}
 
 	fn key_for_chunk_idx(&self, idx: u32) -> Self {

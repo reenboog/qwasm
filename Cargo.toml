@@ -57,7 +57,8 @@ x448 = { version = "0.6" }
 ed25519-dalek = { version = "2.1.1" }
 
 # aes gcm
-aes-gcm = "0.9.0"
+# aes-gcm = "0.9.0"
+ring = { version = "0.17.8" }
 
 # randomness
 rand = { version = "0.8.5" }
