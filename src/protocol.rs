@@ -12,7 +12,7 @@ use crate::{
 	js_net::JsNet,
 	password_lock,
 	register::{self, LockedUser, NewUser},
-	seeds::{Invite, Seed, Welcome, ROOT_ID},
+	seeds::{self, FinishInviteIntent, Invite, InviteIntent, Seed, Welcome, ROOT_ID},
 	session,
 	user::{self, User},
 	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
@@ -154,6 +154,12 @@ pub(crate) trait Network {
 	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error>;
 	async fn get_invite(&self, email: &str) -> Result<Welcome, Error>;
 	async fn invite(&self, invite: &Invite) -> Result<(), Error>;
+	async fn start_invite_intent(&self, intent: &InviteIntent) -> Result<(), Error>;
+	async fn get_invite_intent(&self, email: &str) -> Result<InviteIntent, Error>;
+	async fn finish_invite_intents(
+		&self,
+		intents: &[seeds::FinishInviteIntent],
+	) -> Result<(), Error>;
 	async fn get_user(&self, id: Uid) -> Result<LockedUser, Error>;
 	async fn get_master_key(&self, user_id: Uid) -> Result<encrypted::Encrypted, Error>;
 	async fn lock_session(&self, token_id: Uid, token: &Seed) -> Result<(), Error>;
@@ -280,7 +286,7 @@ impl Protocol {
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
-	pub(crate) async fn register_as_admin<T>(
+	pub(crate) async fn register_as_admin_with_pin<T>(
 		email: &str,
 		pass: &str,
 		pin: &str,
@@ -290,7 +296,20 @@ impl Protocol {
 	where
 		T: Network + 'static,
 	{
-		Self::register_as_admin_impl(email, pass, pin, Box::new(net), remember_me).await
+		Self::register_as_admin_with_pin_impl(email, pass, pin, Box::new(net), remember_me).await
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	pub(crate) async fn register_as_admin_no_pin<T>(
+		email: &str,
+		pass: &str,
+		net: T,
+		remember_me: bool,
+	) -> Result<(), Error>
+	where
+		T: Network + 'static,
+	{
+		Self::register_as_admin_no_pin_impl(email, pass, Box::new(net), remember_me).await
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
@@ -331,19 +350,22 @@ impl Protocol {
 			{
 				let user_id = Uid::from_str(&user_id).map_err(|_| Error::NoSession)?;
 				let token = net.unlock_session(envelope.token_id).await?;
-				let user = net.get_user(user_id).await?;
+				let locked_user = net.get_user(user_id).await?;
 				let mk =
 					session::unlock(envelope.encrypted_mk, token).map_err(|_| Error::NoSession)?;
-				let user =
-					user::unlock_with_master_key(&user, &mk).map_err(|_| Error::NoSession)?;
+				let user = user::unlock_with_master_key(&locked_user, &mk)
+					.map_err(|_| Error::NoSession)?;
 
-				let protocol = Protocol {
+				let mut protocol = Protocol {
 					cd: None,
 					user,
 					net,
 					storage,
 				};
 
+				protocol
+					.finish_acked_invite_intents_if_any(&locked_user.pending_invite_intents)
+					.await?;
 				protocol.lock_session_with_master_key(mk).await?;
 
 				return Ok(protocol);
@@ -385,7 +407,32 @@ impl Protocol {
 		Ok(protocol)
 	}
 
-	async fn register_as_admin_impl(
+	// this does not return a protocol for an ack is required from the sender
+	async fn register_as_admin_no_pin_impl(
+		email: &str,
+		pass: &str,
+		net: Box<dyn Network>,
+		remember_me: bool,
+	) -> Result<(), Error> {
+		let intent = net.get_invite_intent(email).await?;
+		let locked_user = register::signup_as_admin_no_pin(email, pass, intent)?;
+
+		net.signup(user::Signup {
+			email: email.to_string(),
+			pass: pass.to_string(),
+			user: locked_user,
+		})
+		.await?;
+
+		// RECONSIDER: return a protocol and rely on its is_pending_signup
+		if remember_me {
+			// FIXME: implement
+		}
+
+		Ok(())
+	}
+
+	async fn register_as_admin_with_pin_impl(
 		email: &str,
 		pass: &str,
 		pin: &str,
@@ -396,7 +443,7 @@ impl Protocol {
 		let NewUser {
 			locked: locked_user,
 			user,
-		} = register::signup_as_admin(pass, &welcome, pin)?;
+		} = register::signup_as_admin_with_pin(pass, &welcome, pin)?;
 
 		net.signup(user::Signup {
 			email: email.to_string(),
@@ -437,12 +484,16 @@ impl Protocol {
 			_ => Error::BadOperation,
 		})?;
 
-		let protocol = Protocol {
+		let mut protocol = Protocol {
 			cd: None,
 			user,
 			net,
 			storage: Storage {},
 		};
+
+		protocol
+			.finish_acked_invite_intents_if_any(&locked_user.pending_invite_intents)
+			.await?;
 
 		if remember_me {
 			protocol.lock_session(pass).await?;
@@ -465,14 +516,24 @@ impl Protocol {
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	pub async fn register_as_admin(
+	pub async fn register_as_admin_with_pin(
 		email: &str,
 		pass: &str,
 		pin: &str,
 		net: JsNet,
 		remember_me: bool,
 	) -> Result<Protocol, Error> {
-		Self::register_as_admin_impl(email, pass, pin, Box::new(net), remember_me).await
+		Self::register_as_admin_with_pin_impl(email, pass, pin, Box::new(net), remember_me).await
+	}
+
+	#[cfg(target_arch = "wasm32")]
+	pub async fn register_as_admin_no_pin(
+		email: &str,
+		pass: &str,
+		net: JsNet,
+		remember_me: bool,
+	) -> Result<(), Error> {
+		Self::register_as_admin_no_pin_impl(email, pass, Box::new(net), remember_me).await
 	}
 
 	#[cfg(target_arch = "wasm32")]
@@ -572,15 +633,19 @@ impl Protocol {
 				.map_err(|_| Error::JsViolated)?
 		};
 		let mk = webauthn::unlock(passkey.mk, &prf_output).map_err(|_| Error::NoAccess)?;
-		let user = net.get_user(passkey.user_id).await?;
-		let user = user::unlock_with_master_key(&user, &mk).map_err(|_| Error::NoAccess)?;
+		let locked_user = net.get_user(passkey.user_id).await?;
+		let user = user::unlock_with_master_key(&locked_user, &mk).map_err(|_| Error::NoAccess)?;
 		let storage = Storage {};
-		let protocol = Protocol {
+		let mut protocol = Protocol {
 			cd: None,
 			user,
 			net: Box::new(net),
 			storage,
 		};
+
+		protocol
+			.finish_acked_invite_intents_if_any(&locked_user.pending_invite_intents)
+			.await?;
 
 		if remember_me {
 			protocol.lock_session_with_master_key(mk).await?;
@@ -805,14 +870,57 @@ impl Protocol {
 			.map_err(|_| Error::NoAccess)
 	}
 
-	pub async fn invite_with_all_seeds_for_email(
+	async fn finish_acked_invite_intents_if_any(
+		&mut self,
+		intents: &[InviteIntent],
+	) -> Result<(), Error> {
+		let intents: Vec<_> = intents
+			.iter()
+			.filter_map(|int| {
+				if int.receiver.is_some() && int.sender.id() == self.user.identity.id() {
+					Some(FinishInviteIntent {
+						email: int.email.clone(),
+						share: self.user.export_seeds_to_identity(
+							int.fs_ids.as_deref(),
+							int.db_ids.as_deref(),
+							int.receiver.as_ref().unwrap(),
+						),
+					})
+				} else {
+					None
+				}
+			})
+			.collect();
+
+		if !intents.is_empty() {
+			self.net.finish_invite_intents(&intents).await?;
+		}
+
+		Ok(())
+	}
+
+	pub async fn invite_with_all_seeds_for_email_no_pin(
+		&mut self,
+		email: &str,
+	) -> Result<(), Error> {
+		let intent = self
+			.user
+			.start_invite_intent_with_seeds_for_email(email, None, None);
+
+		self.net.start_invite_intent(&intent).await?;
+
+		Ok(())
+	}
+
+	// return an object to store on the backend
+	pub async fn invite_with_all_seeds_for_email_and_pin(
 		&mut self,
 		email: &str,
 		pin: &str,
 	) -> Result<(), Error> {
 		let invite = self
 			.user
-			.invite_with_seeds_for_email(email, pin, None, None);
+			.invite_with_seeds_for_email_and_pin(email, pin, None, None);
 
 		self.net.invite(&invite).await?;
 

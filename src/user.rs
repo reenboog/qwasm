@@ -6,12 +6,14 @@ use crate::{
 	aes_gcm,
 	database::{self, SeedById},
 	encrypted, hkdf,
-	id::{self, Uid},
+	id::Uid,
 	identity::{self, Identity},
 	password_lock,
 	register::LockedUser,
 	salt::Salt,
-	seeds::{self, ctx_to_sign, Bundle, Export, Import, Invite, Seed, Sorted, ROOT_ID},
+	seeds::{
+		self, ctx_to_sign, Bundle, Export, Import, Invite, InviteIntent, Seed, Sorted, ROOT_ID,
+	},
 	vault::FileSystem,
 };
 
@@ -191,9 +193,52 @@ impl User {
 		Self::derive_seed_with_label(identity, b"fs")
 	}
 
+	pub fn start_invite_intent_with_seeds_for_email(
+		&self,
+		email: &str,
+		fs_ids: Option<&[Uid]>,
+		db_ids: Option<&[database::Index]>,
+	) -> InviteIntent {
+		// no need to check access level at this stage for it may (or may not) change
+		// by the moment this intent is acknowledged – check *then* instead
+		let user_id = Uid::generate();
+		let to_sign = InviteIntent::ctx_to_sign(&self.identity.id(), email, &user_id);
+		let sig = self.identity.private().sign(&to_sign);
+
+		InviteIntent {
+			email: email.to_string(),
+			sender: self.identity.public().clone(),
+			sig,
+			user_id,
+			receiver: None,
+			fs_ids: fs_ids.and_then(|ids| Some(ids.iter().cloned().collect())),
+			db_ids: db_ids.and_then(|ids| Some(ids.iter().cloned().collect())),
+		}
+	}
+
+	pub fn export_seeds_to_identity(
+		&mut self,
+		fs_ids: Option<&[Uid]>,
+		db_ids: Option<&[database::Index]>,
+		receiver: &identity::Public,
+	) -> seeds::LockedShare {
+		let bundle = self.seeds_for_ids(fs_ids, db_ids);
+		let _pub = self.identity.public();
+		let encrypted = receiver.encrypt(&bundle);
+		let export = Export::from_bundle(&bundle, receiver.id());
+		let sig = self.identity.private().sign(&ctx_to_sign(_pub, &export));
+
+		seeds::LockedShare {
+			sender: _pub.clone(),
+			export,
+			payload: encrypted,
+			sig,
+		}
+	}
+
 	// pin is just a password used to encrypt the seeds, if any
 	// at this point, all we know is an email address and the seeds
-	pub fn invite_with_seeds_for_email(
+	pub fn invite_with_seeds_for_email_and_pin(
 		&mut self,
 		email: &str,
 		pin: &str,
@@ -246,7 +291,7 @@ impl User {
 		aes.decrypt(&encrypted.ct).map_err(|_| Error::BadKey)
 	}
 
-	// TODO: test for fain-grained access control
+	// TODO: test for fine-grained access control
 	fn aes_for_entry_in_table(
 		&self,
 		table: &str,
@@ -296,18 +341,6 @@ impl User {
 }
 
 impl User {
-	// exort seeds as a LockedShare to a public key
-	// pub fn export_seeds_to_identity(&self, fs: &[u64], db: &[u64], identity: Identity::Public) -> Vec<u8>
-	// the backend should check, if it's a redundant share, eg when the recipient already has root and no subroot is required
-	// { .. }
-
-	// pub fn export_seeds_to_identity(&self, identity: &identity::Public) -> Vec<u8> {
-	// 	todo!()
-	// }
-
-	// export all *available* seeds; returns json-serialized Invite
-	// used when creating new admins
-
 	// FIXME: sign as well
 	//
 	pub fn encrypt_announcement(&self, msg: &str) -> Result<String, Error> {
@@ -426,7 +459,7 @@ mod tests {
 	use crate::{
 		database,
 		id::Uid,
-		register::{signup_as_admin, signup_as_god, NewUser},
+		register::{signup_as_admin_with_pin, signup_as_god, NewUser},
 		seeds::{Welcome, ROOT_ID},
 		user::{unlock_with_pass, User},
 	};
@@ -440,7 +473,7 @@ mod tests {
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.invite_with_seeds_for_email("alice.mail.com", pin, None, None);
+		let invite = god.invite_with_seeds_for_email_and_pin("alice.mail.com", pin, None, None);
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -452,7 +485,7 @@ mod tests {
 		let NewUser {
 			locked: mut locked_admin,
 			user: admin,
-		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
+		} = signup_as_admin_with_pin(admin_pass, &welcome, pin).unwrap();
 
 		locked_admin.roots = locked_user.roots;
 
@@ -483,7 +516,7 @@ mod tests {
 
 		let pin = "1234567890";
 		// share all root seeds
-		let invite = god.invite_with_seeds_for_email("adaml@mail.com", pin, None, None);
+		let invite = god.invite_with_seeds_for_email_and_pin("adaml@mail.com", pin, None, None);
 		let roots = locked_user.roots;
 		let welcome = Welcome {
 			user_id: invite.user_id,
@@ -496,7 +529,7 @@ mod tests {
 		let NewUser {
 			locked: _,
 			user: mut adam,
-		} = signup_as_admin(adam_pass, &welcome, pin).unwrap();
+		} = signup_as_admin_with_pin(adam_pass, &welcome, pin).unwrap();
 
 		// all this user has for db is the root seed of the god
 		let db_seeds = adam
@@ -527,7 +560,7 @@ mod tests {
 			table: "requests".to_string(),
 			column: "content".to_string(),
 		};
-		let eve_invite = adam.invite_with_seeds_for_email(
+		let eve_invite = adam.invite_with_seeds_for_email_and_pin(
 			"eve@mail.com",
 			eve_pin,
 			None,
@@ -548,7 +581,7 @@ mod tests {
 		let NewUser {
 			locked: _,
 			user: mut eve,
-		} = signup_as_admin(eve_pass, &welcome, eve_pin).unwrap();
+		} = signup_as_admin_with_pin(eve_pass, &welcome, eve_pin).unwrap();
 
 		// eve should have 4 shares
 		let db_seeds = eve
@@ -572,7 +605,8 @@ mod tests {
 		// now eve share all her shares with abel
 		let abel_pin = "777";
 		let abel_pass = "abel_pass";
-		let abel_invite = eve.invite_with_seeds_for_email("abel@mail.com", abel_pin, None, None);
+		let abel_invite =
+			eve.invite_with_seeds_for_email_and_pin("abel@mail.com", abel_pin, None, None);
 		let welcome = Welcome {
 			user_id: abel_invite.user_id,
 			sender: abel_invite.sender,
@@ -583,7 +617,7 @@ mod tests {
 		let NewUser {
 			locked: _,
 			user: mut eve,
-		} = signup_as_admin(abel_pass, &welcome, abel_pin).unwrap();
+		} = signup_as_admin_with_pin(abel_pass, &welcome, abel_pin).unwrap();
 		let db_seeds = eve
 			.imports
 			.iter()
@@ -607,7 +641,7 @@ mod tests {
 		let idx_sales = database::Index::Table {
 			table: "sales".to_string(),
 		};
-		let cain_invite = eve.invite_with_seeds_for_email(
+		let cain_invite = eve.invite_with_seeds_for_email_and_pin(
 			"eve@mail.com",
 			cain_pin,
 			None,
@@ -638,7 +672,7 @@ mod tests {
 		let NewUser {
 			locked: _,
 			user: cain,
-		} = signup_as_admin(cain_pass, &welcome, cain_pin).unwrap();
+		} = signup_as_admin_with_pin(cain_pass, &welcome, cain_pin).unwrap();
 
 		// eve should have 4 shares
 		let db_seeds = cain

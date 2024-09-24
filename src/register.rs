@@ -5,7 +5,7 @@ use crate::{
 	id::Uid,
 	identity::{self},
 	password_lock,
-	seeds::{self, Bundle, Export, Import, LockedShare, Welcome},
+	seeds::{self, Bundle, Export, Import, InviteIntent, LockedShare, Welcome},
 	user::{self, User, GOD_ID},
 	vault::{FileSystem, LockedNode},
 };
@@ -26,7 +26,10 @@ pub struct LockedUser {
 	#[serde(rename = "pub")]
 	pub(crate) _pub: identity::Public,
 	// exports & imports will be decoded from this; god has empty imports, always
+	// sent, ackend and encrypted shared
 	pub(crate) shares: Vec<LockedShare>,
+	// sent and optionally acked shares (could be useful to cancel, if not yet accepted)
+	pub(crate) pending_invite_intents: Vec<InviteIntent>,
 	// get_nodes(locked_shares(user_id == share.receiver | user_id == 0 then node_id_root).export.fs.ids + children)
 	// TODO: include a hash of the hierarchy for later checks
 	pub(crate) roots: Vec<LockedNode>,
@@ -58,7 +61,11 @@ pub(crate) fn signup_as_god(pass: &str) -> Result<NewUser, Error> {
 	signup_with_params(pass, identity, None, fs, vec![root])
 }
 
-pub(crate) fn signup_as_admin(pass: &str, welcome: &Welcome, pin: &str) -> Result<NewUser, Error> {
+pub(crate) fn signup_as_admin_with_pin(
+	pass: &str,
+	welcome: &Welcome,
+	pin: &str,
+) -> Result<NewUser, Error> {
 	let bundle = password_lock::unlock(&welcome.imports, pin).map_err(|_| Error::WrongPass)?;
 	let bundle: Bundle = serde_json::from_slice(&bundle).map_err(|_| Error::BadJson)?;
 	let import = Import {
@@ -75,6 +82,29 @@ pub(crate) fn signup_as_admin(pass: &str, welcome: &Welcome, pin: &str) -> Resul
 		fs,
 		vec![],
 	)
+}
+
+pub(crate) fn signup_as_admin_no_pin(
+	email: &str,
+	pass: &str,
+	intent: InviteIntent,
+) -> Result<LockedUser, Error> {
+	let to_sign = InviteIntent::ctx_to_sign(&intent.sender.id(), &email, &intent.user_id);
+
+	if intent.sender.verify(&intent.sig, &to_sign) && email == intent.email {
+		let identity = identity::Identity::generate(intent.user_id);
+		let locked_priv = password_lock::lock(identity.private(), pass).unwrap();
+
+		Ok(LockedUser {
+			encrypted_priv: locked_priv,
+			_pub: identity.public().clone(),
+			shares: Vec::new(),
+			roots: Vec::new(),
+			pending_invite_intents: Vec::new(),
+		})
+	} else {
+		Err(Error::ForgedSig)
+	}
 }
 
 fn signup_with_params(
@@ -115,6 +145,7 @@ fn signup_with_params(
 		_pub: _pub.clone(),
 		shares,
 		roots: nodes_to_upload,
+		pending_invite_intents: Vec::new(),
 	};
 
 	Ok(NewUser {
@@ -168,11 +199,13 @@ fn signup_with_params(
 #[cfg(test)]
 mod tests {
 	use crate::{
-		seeds::{Invite, Welcome},
+		id::Uid,
+		seeds::{Invite, Welcome, ROOT_ID},
 		user::{self},
+		vault::NewNodeReq,
 	};
 
-	use super::{signup_as_admin, signup_as_god, NewUser};
+	use super::{signup_as_admin_no_pin, signup_as_admin_with_pin, signup_as_god, NewUser};
 
 	#[test]
 	fn test_unlock() {
@@ -195,7 +228,7 @@ mod tests {
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.invite_with_seeds_for_email("alice.mail.com", pin, None, None);
+		let invite = god.invite_with_seeds_for_email_and_pin("alice.mail.com", pin, None, None);
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -208,7 +241,7 @@ mod tests {
 		let NewUser {
 			locked: mut locked_admin,
 			user: admin,
-		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
+		} = signup_as_admin_with_pin(admin_pass, &welcome, pin).unwrap();
 
 		// pretend the backend returns all locked nodes for this user
 		locked_admin.roots = locked_god.roots;
@@ -216,6 +249,48 @@ mod tests {
 		let unlocked_admin = user::unlock_with_pass(admin_pass, &locked_admin).unwrap();
 
 		assert_eq!(admin, unlocked_admin);
+	}
+
+	#[test]
+	fn test_register_no_pin() {
+		let god_pass = "god_pass";
+		let NewUser {
+			locked: locked_god,
+			user: mut god,
+		} = signup_as_god(&god_pass).unwrap();
+		let root_id = Uid::new(ROOT_ID);
+		let NewNodeReq { node, locked_node } =
+			god.fs.mkdir(root_id, "test", &god.identity).unwrap();
+		_ = god.fs.insert_node(node.clone());
+		let admin_email = "admin@mail.com";
+		// 1 create an intent
+		let intent = god.start_invite_intent_with_seeds_for_email(admin_email, None, None);
+		let admin_pass = "123";
+		// 2 prentend to have fetch the intent & signup
+		let mut locked_admin =
+			signup_as_admin_no_pin(&admin_email, &admin_pass, intent.clone()).unwrap();
+		// 3 pretend to have finished the intent by sharing the seeds
+		let export = god.export_seeds_to_identity(
+			intent.fs_ids.as_deref(),
+			intent.db_ids.as_deref(),
+			&locked_admin._pub,
+		);
+
+		locked_admin.shares = vec![export];
+		locked_admin.roots = vec![locked_god.roots[0].clone(), locked_node];
+
+		// 4 now, when unlocking it's just regular shares
+		let unlocked_admin = user::unlock_with_pass(&admin_pass, &locked_admin).unwrap();
+
+		assert!(unlocked_admin.fs.ls_dir(node.id).is_ok());
+		assert_eq!(unlocked_admin.fs.ls_dir(node.id), god.fs.ls_dir(node.id));
+		assert!(unlocked_admin.fs.ls_dir(root_id).is_ok());
+		assert_eq!(unlocked_admin.fs.ls_dir(root_id), god.fs.ls_dir(root_id));
+
+		// 5 make sure db access is ok as well
+		assert!(unlocked_admin
+			.decrypt_announcement(&god.encrypt_announcement("hey there").unwrap())
+			.is_ok())
 	}
 
 	#[test]
@@ -227,7 +302,7 @@ mod tests {
 		} = signup_as_god(&god_pass).unwrap();
 
 		let pin = "1234567890";
-		let invite = god.invite_with_seeds_for_email("alice.mail.com", pin, None, None);
+		let invite = god.invite_with_seeds_for_email_and_pin("alice.mail.com", pin, None, None);
 		let welcome = Welcome {
 			user_id: invite.user_id,
 			sender: invite.sender,
@@ -239,11 +314,12 @@ mod tests {
 		let NewUser {
 			locked: locked_user,
 			user: mut admin,
-		} = signup_as_admin(admin_pass, &welcome, pin).unwrap();
+		} = signup_as_admin_with_pin(admin_pass, &welcome, pin).unwrap();
 
 		let new_pin = "555";
 		let new_pass = "new_admin_pass";
-		let new_invite = admin.invite_with_seeds_for_email("bob.mail.com", &new_pin, None, None);
+		let new_invite =
+			admin.invite_with_seeds_for_email_and_pin("bob.mail.com", &new_pin, None, None);
 		let welcome = Welcome {
 			user_id: new_invite.user_id,
 			sender: new_invite.sender,
@@ -254,7 +330,7 @@ mod tests {
 		let NewUser {
 			locked: new_admin_locked,
 			user: new_admin,
-		} = signup_as_admin(new_pass, &welcome, new_pin).unwrap();
+		} = signup_as_admin_with_pin(new_pass, &welcome, new_pin).unwrap();
 		let new_unlocked_admin = user::unlock_with_pass(new_pass, &new_admin_locked).unwrap();
 
 		assert_eq!(new_admin, new_unlocked_admin);

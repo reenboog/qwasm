@@ -3,7 +3,7 @@ use crate::{
 	id::Uid,
 	protocol::{Error, Network},
 	register::LockedUser,
-	seeds::{Invite, Seed, Welcome},
+	seeds::{self, Invite, InviteIntent, Seed, Welcome},
 	user,
 	vault::LockedNode,
 	webauthn,
@@ -26,6 +26,9 @@ pub struct JsNet {
 	pub(crate) get_user: js_sys::Function,
 	pub(crate) get_invite: js_sys::Function,
 	pub(crate) invite: js_sys::Function,
+	pub(crate) start_invite_intent: js_sys::Function,
+	pub(crate) get_invite_intent: js_sys::Function,
+	pub(crate) finish_invite_intents: js_sys::Function,
 	pub(crate) start_passkey_registration: js_sys::Function,
 	pub(crate) finish_passkey_registration: js_sys::Function,
 	pub(crate) start_passkey_auth: js_sys::Function,
@@ -44,6 +47,9 @@ impl JsNet {
 		get_user: js_sys::Function,
 		get_invite: js_sys::Function,
 		invite: js_sys::Function,
+		start_invite_intent: js_sys::Function,
+		get_invite_intent: js_sys::Function,
+		finish_invite_intents: js_sys::Function,
 		lock_session: js_sys::Function,
 		unlock_session: js_sys::Function,
 		start_passkey_registration: js_sys::Function,
@@ -60,6 +66,9 @@ impl JsNet {
 			get_user,
 			get_invite,
 			invite,
+			start_invite_intent,
+			get_invite_intent,
+			finish_invite_intents,
 			lock_session,
 			unlock_session,
 			start_passkey_registration,
@@ -194,6 +203,54 @@ impl Network for JsNet {
 		let this = JsValue::NULL;
 		let promise = self
 			.invite
+			.call1(&this, &json)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
+
+		Ok(())
+	}
+
+	async fn start_invite_intent(&self, intent: &InviteIntent) -> Result<(), Error> {
+		let serialized = serde_json::to_string(intent).unwrap();
+		let json = JsValue::from(serialized);
+		let this = JsValue::NULL;
+		let promise = self
+			.start_invite_intent
+			.call1(&this, &json)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
+
+		Ok(())
+	}
+
+	async fn get_invite_intent(&self, email: &str) -> Result<InviteIntent, Error> {
+		// IMPORTANT: base64-encoded to avoid invalid paths, eg GET /invite/alex@mode.io
+		let email = base64::encode_config(email, base64::URL_SAFE);
+		let email = JsValue::from(email);
+		let this = JsValue::NULL;
+		let promise = self
+			.get_invite_intent
+			.call1(&this, &email)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let intent: InviteIntent = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(intent)
+	}
+
+	async fn finish_invite_intents(
+		&self,
+		intents: &[seeds::FinishInviteIntent],
+	) -> Result<(), Error> {
+		let this = JsValue::NULL;
+		let serialized = serde_json::to_string(intents).unwrap();
+		let json = JsValue::from(serialized);
+		let promise = self
+			.finish_invite_intents
 			.call1(&this, &json)
 			.map_err(|_| Error::JsViolated)?;
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);

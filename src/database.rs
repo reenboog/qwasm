@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{
 	hkdf,
 	id::Uid,
@@ -16,7 +18,7 @@ use crate::{
 // h_column = h(h_table + column_name)
 // h_item = h(h_column + item_salt)
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub enum Index {
 	Table { table: String },
 	Column { table: String, column: String },

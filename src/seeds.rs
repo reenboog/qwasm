@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
 	base64_blobs::{deserialize_array_base64, serialize_array_base64},
-	ed25519, hmac,
+	database, ed25519, hmac,
 	id::Uid,
-	identity, password_lock,
+	identity, password_lock, user,
 	vault::LockedNode,
 };
 
@@ -116,6 +116,33 @@ pub struct Invite {
 	pub(crate) export: Export,
 	// sign({ sender, exports })
 	pub(crate) sig: ed25519::Signature,
+}
+
+// a pin-less invite intent that should be later acknowledged
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct InviteIntent {
+	pub(crate) email: String,
+	pub(crate) sender: identity::Public,
+	// sign(sender + email + receiver)
+	pub(crate) sig: ed25519::Signature,
+	pub(crate) user_id: Uid,
+	// receiver's pk which the sender is to use to finally encrypt the previously selected seeds
+	pub(crate) receiver: Option<identity::Public>,
+	// None means `root`
+	pub(crate) fs_ids: Option<Vec<Uid>>,
+	pub(crate) db_ids: Option<Vec<database::Index>>,
+}
+
+impl InviteIntent {
+	pub(crate) fn ctx_to_sign(sender: &Uid, email: &str, receiver: &Uid) -> Vec<u8> {
+		[&sender.as_bytes(), email.as_bytes(), &receiver.as_bytes()].concat()
+	}
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FinishInviteIntent {
+	pub(crate) email: String,
+	pub(crate) share: LockedShare,
 }
 
 #[derive(Serialize, Deserialize)]
