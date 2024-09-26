@@ -1,6 +1,10 @@
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 
 use crate::{
+	aes_gcm,
+	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
+	hkdf,
 	key_pair::{KeyPair, KeyPairSize},
 	private_key::{PrivateKey, SharedKey},
 	public_key::PublicKey,
@@ -23,6 +27,31 @@ pub type PublicKeyX448 = PublicKey<KeyTypeX448, { KeyTypeX448::PUB }>;
 pub type KeyPairX448 = KeyPair<KeyTypeX448, { KeyTypeX448::PRIV }, { KeyTypeX448::PUB }>;
 pub type SharedKeyX448 = SharedKey<KeyTypeX448, { KeyTypeX448::SHARED }>;
 
+#[derive(Debug, PartialEq)]
+pub enum Error {
+	BadKey,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct Encrypted {
+	// encrypted message
+	#[serde(
+		serialize_with = "serialize_vec_base64",
+		deserialize_with = "deserialize_vec_base64"
+	)]
+	pub ct: Vec<u8>,
+	// an ephemeral key, dh-ed with an identity pub key
+	pub eph_x448: PublicKeyX448,
+}
+
+fn aes_from_dh_keys(sk: &PrivateKeyX448, pk: &PublicKeyX448) -> aes_gcm::Aes {
+	let shared = dh_exchange(sk, pk);
+	let key_iv = hkdf::Hkdf::from_ikm(shared.as_bytes())
+		.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
+
+	aes_gcm::Aes::from(&key_iv)
+}
+
 impl PrivateKeyX448 {
 	pub fn generate() -> Self {
 		use x448::Secret;
@@ -36,6 +65,13 @@ impl PrivateKeyX448 {
 
 		secret.as_bytes().into()
 	}
+
+	pub fn decrypt(&self, encrypted: &Encrypted) -> Result<Vec<u8>, Error> {
+		let aes = aes_from_dh_keys(&self, &encrypted.eph_x448);
+		let pt = aes.decrypt(&encrypted.ct).map_err(|_| Error::BadKey)?;
+
+		Ok(pt)
+	}
 }
 
 impl PublicKeyX448 {
@@ -46,6 +82,26 @@ impl PublicKeyX448 {
 		let public = PublicKey::from(&secret);
 
 		public.as_bytes().into()
+	}
+
+	pub fn encrypt_serialized(&self, pt: &[u8]) -> Encrypted {
+		let kp = KeyPairX448::generate();
+		let aes = aes_from_dh_keys(kp.private_key(), &self);
+		let ct = aes.encrypt(pt);
+
+		Encrypted {
+			ct,
+			eph_x448: kp.public_key().clone(),
+		}
+	}
+
+	pub fn encrypt<T>(&self, pt: T) -> Encrypted
+	where
+		T: Serialize,
+	{
+		let serialized = serde_json::to_vec(&pt).unwrap();
+
+		self.encrypt_serialized(&serialized)
 	}
 }
 
@@ -86,6 +142,8 @@ pub fn dh_exchange(private: &PrivateKeyX448, public: &PublicKeyX448) -> SharedKe
 
 #[cfg(test)]
 mod tests {
+	use serde::{Deserialize, Serialize};
+
 	use super::{dh_exchange, KeyPairX448, KeyTypeX448, PrivateKeyX448, PublicKeyX448};
 	use crate::key_pair::KeyPairSize;
 
@@ -100,6 +158,34 @@ mod tests {
 		let shared = dh_exchange(&alice, &bob);
 
 		assert_eq!(shared.as_bytes(), shared_ref);
+	}
+
+	#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+	struct Msg {
+		data: Vec<u8>,
+	}
+
+	#[test]
+	fn test_encrypt_decrypt_serialized() {
+		let kp = KeyPairX448::generate();
+		let pt = b"hello there";
+		let ct = kp.public_key().encrypt_serialized(pt);
+		let decrypted = kp.private_key().decrypt(&ct);
+
+		assert_eq!(decrypted, Ok(pt.to_vec()));
+	}
+
+	#[test]
+	fn test_encrypt_decrypt() {
+		let kp = KeyPairX448::generate();
+		let pt = Msg {
+			data: vec![117u8; 100],
+		};
+		let ct = kp.public_key().encrypt(pt.clone());
+		let decrypted = kp.private_key().decrypt(&ct).unwrap();
+		let deserialized: Msg = serde_json::from_slice(&decrypted).unwrap();
+
+		assert_eq!(deserialized, pt);
 	}
 
 	#[test]

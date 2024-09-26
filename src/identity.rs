@@ -4,15 +4,14 @@ use sha2::{Digest, Sha256};
 use crate::{
 	aes_gcm,
 	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
-	ed25519::{KeyPairEd25519, PrivateKeyEd25519, PublicKeyEd25519, Signature},
-	hkdf, hmac,
+	ed25519::{KeyPairEd25519, PrivateKeyEd25519, PublicKeyEd25519, Signature}, hmac,
 	id::Uid,
-	x448::{dh_exchange, KeyPairX448, PrivateKeyX448, PublicKeyX448},
+	kyber::{self, KeyPairKyber, PrivateKeyKyber, PublicKeyKyber},
+	x448::{self, KeyPairX448, PrivateKeyX448, PublicKeyX448},
 };
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Identity {
-	// TODO: introduce Kyber?
 	pub(crate) _priv: Private,
 	pub(crate) _pub: Public,
 }
@@ -21,6 +20,7 @@ pub struct Identity {
 pub struct Private {
 	pub(crate) x448: PrivateKeyX448,
 	pub(crate) ed448: PrivateKeyEd25519,
+	pub(crate) kyber: PrivateKeyKyber,
 }
 
 #[derive(Debug)]
@@ -29,9 +29,12 @@ pub enum Error {
 }
 
 impl Private {
-	pub fn decrypt(&self, encrypted: &Encrypted) -> Result<Vec<u8>, Error> {
-		let aes = aes_from_dh_keys(&self.x448, &encrypted.eph_x448);
-		let pt = aes.decrypt(&encrypted.ct).map_err(|_| Error::BadKey)?;
+	pub fn decrypt(&self, ct: &Encrypted) -> Result<Vec<u8>, Error> {
+		let ecc = self.kyber.decrypt(&ct.ecc_ct).map_err(|_| Error::BadKey)?;
+		let ecc: x448::Encrypted = serde_json::from_slice(&ecc).map_err(|_| Error::BadKey)?;
+		let aes = self.x448.decrypt(&ecc).map_err(|_| Error::BadKey)?;
+		let aes: aes_gcm::Aes = serde_json::from_slice(&aes).map_err(|_| Error::BadKey)?;
+		let pt = aes.decrypt(&ct.ct).map_err(|_| Error::BadKey)?;
 
 		Ok(pt)
 	}
@@ -48,26 +51,19 @@ pub struct Public {
 	// can be used to encrypt messages to or verify signatures against
 	pub(crate) x448: PublicKeyX448,
 	pub(crate) ed448: PublicKeyEd25519,
+	pub(crate) kyber: PublicKeyKyber,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Encrypted {
-	// encrypted message
+	// layer 0: aes-encrypted data
 	#[serde(
 		serialize_with = "serialize_vec_base64",
 		deserialize_with = "deserialize_vec_base64"
 	)]
 	ct: Vec<u8>,
-	// an ephemeral key, dh-ed with an identity pub key
-	eph_x448: PublicKeyX448,
-}
-
-fn aes_from_dh_keys(sk: &PrivateKeyX448, pk: &PublicKeyX448) -> aes_gcm::Aes {
-	let shared = dh_exchange(sk, pk);
-	let key_iv = hkdf::Hkdf::from_ikm(shared.as_bytes())
-		.expand_no_info::<{ aes_gcm::Key::SIZE + aes_gcm::Iv::SIZE }>();
-
-	aes_gcm::Aes::from(&key_iv)
+	// layer 2: kyber encrypted ecc key (which in turn encrypts layer 1)
+	ecc_ct: kyber::Encrypted,
 }
 
 impl Public {
@@ -77,14 +73,12 @@ impl Public {
 	}
 
 	pub fn encrypt_serialized(&self, pt: &[u8]) -> Encrypted {
-		let kp = KeyPairX448::generate();
-		let aes = aes_from_dh_keys(kp.private_key(), &self.x448);
+		let aes = aes_gcm::Aes::new();
 		let ct = aes.encrypt(pt);
+		let aes_ct = self.x448.encrypt(&aes);
+		let ecc_ct = self.kyber.encrypt(aes_ct.clone());
 
-		Encrypted {
-			ct,
-			eph_x448: kp.public_key().clone(),
-		}
+		Encrypted { ct, ecc_ct }
 	}
 
 	pub fn verify(&self, sig: &Signature, msg: &[u8]) -> bool {
@@ -95,6 +89,7 @@ impl Public {
 		let bytes = [
 			self.x448.as_bytes().as_slice(),
 			self.ed448.as_bytes(),
+			self.kyber.as_bytes(),
 			&self.id().as_bytes(),
 		]
 		.concat();
@@ -130,16 +125,22 @@ impl Identity {
 			private: ed448_priv,
 			public: ed448_pub,
 		} = KeyPairEd25519::generate();
+		let KeyPairKyber {
+			private: kyber_priv,
+			public: kyber_pub,
+		} = KeyPairKyber::generate();
 
 		Self {
 			_priv: Private {
 				x448: x448_priv,
 				ed448: ed448_priv,
+				kyber: kyber_priv,
 			},
 			_pub: Public {
 				id: id,
 				x448: x448_pub,
 				ed448: ed448_pub,
+				kyber: kyber_pub,
 			},
 		}
 	}

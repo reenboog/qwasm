@@ -4,6 +4,7 @@ pub mod ed25519;
 pub mod hkdf;
 pub mod hmac;
 pub mod identity;
+pub mod kyber;
 pub mod password_lock;
 pub mod protocol;
 pub mod register;

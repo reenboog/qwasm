@@ -99,7 +99,7 @@ pub struct LockedShare {
 	pub(crate) sender: identity::Public,
 	// ids of the share (convenient to return roots to unlock)
 	pub(crate) export: Export,
-	// encrypted content of the sahre
+	// encrypted content of the share
 	pub(crate) payload: identity::Encrypted,
 	// sign({ sender, exports })
 	pub(crate) sig: ed25519::Signature,

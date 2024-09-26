@@ -56,6 +56,9 @@ x448 = { version = "0.6" }
 # ed25519
 ed25519-dalek = { version = "2.1.1" }
 
+# kyber
+pqc_kyber = { version = "0.7.1", features = ["wasm", "kyber1024"] }
+
 # aes gcm
 aes-gcm = "0.9.0"
 
