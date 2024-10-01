@@ -735,6 +735,26 @@ impl FileSystem {
 		}
 	}
 
+	pub fn delete_node(&mut self, id: Uid) -> Result<(), Error> {
+		if let Some(node) = self.node_by_id(id) {
+			if let Some(parent) = self.node_by_id_mut(node.parent_id) {
+				if let Entry::Dir {
+					ref mut children,
+					seed: _,
+				} = parent.entry {
+					children.retain(|n| n.id != id);
+
+					return Ok(());
+				}
+			} else {
+				// remove from the roots
+				self.roots.retain(|n| n.id != id);
+			}
+		}
+
+		return  Err(Error::NotFound)
+	}
+
 	// touch and immediately apply its transaction
 	// TODO: the backend should create a PendingUpload(id); when uploaded /save/id should be called
 	pub fn touch_mut(

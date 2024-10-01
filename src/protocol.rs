@@ -152,6 +152,7 @@ pub(crate) trait Network {
 	async fn fetch_subtree(&self, id: Uid) -> Result<Vec<LockedNode>, Error>;
 	// the backend may mark these uploads as pending at first and as complete when all data has been transmitted
 	async fn upload_nodes(&self, nodes: &[LockedNode]) -> Result<(), Error>;
+	async fn delete_nodes(&self, ids: &[Uid]) -> Result<Vec<Uid>, Error>;
 	async fn get_invite(&self, email: &str) -> Result<Welcome, Error>;
 	async fn invite(&self, invite: &Invite) -> Result<(), Error>;
 	async fn start_invite_intent(&self, intent: &InviteIntent) -> Result<(), Error>;
@@ -782,6 +783,16 @@ impl Protocol {
 		} else {
 			Err(Error::NoAccess)
 		}
+	}
+
+	// TODO: introduce DeleteNodeReq instead?
+	pub async fn delete_node(&mut self, id: &Uid) -> Result<(), Error> {
+		// delete_nodes returns a list of all deleted nodes and their direct/indirect children
+		// TODO: use deleted_nodes to refresh, if dirty
+		let _deleted_nodes = self.net.delete_nodes(&[*id]).await.map_err(|_| Error::BadOperation)?;
+		self.user.fs.delete_node(*id).map_err(|_| Error::NotFound)?;
+
+		Ok(())
 	}
 
 	pub async fn encrypt_block_for_file(&self, pt: &[u8], id: &Uid) -> Result<Uint8Array, Error> {

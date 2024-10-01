@@ -20,6 +20,7 @@ pub struct JsNet {
 	pub(crate) login: js_sys::Function,
 	pub(crate) fetch_subtree: js_sys::Function,
 	pub(crate) upload_nodes: js_sys::Function,
+	pub(crate) delete_nodes: js_sys::Function,
 	pub(crate) get_mk: js_sys::Function,
 	pub(crate) lock_session: js_sys::Function,
 	pub(crate) unlock_session: js_sys::Function,
@@ -43,6 +44,7 @@ impl JsNet {
 		login: js_sys::Function,
 		fetch_subtree: js_sys::Function,
 		upload_nodes: js_sys::Function,
+		delete_nodes: js_sys::Function,
 		get_mk: js_sys::Function,
 		get_user: js_sys::Function,
 		get_invite: js_sys::Function,
@@ -62,6 +64,7 @@ impl JsNet {
 			login,
 			fetch_subtree,
 			upload_nodes,
+			delete_nodes,
 			get_mk,
 			get_user,
 			get_invite,
@@ -148,6 +151,22 @@ impl Network for JsNet {
 		js_future.await.map_err(|e| Error::NoNetwork(e))?;
 
 		Ok(())
+	}
+
+	async fn delete_nodes(&self, ids: &[Uid]) -> Result<Vec<Uid>, Error> {
+		let serialized = serde_json::to_string(ids).unwrap();
+		let json = JsValue::from(serialized);
+		let this = JsValue::NULL;
+		let promise = self
+			.delete_nodes
+			.call1(&this, &json)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
+		let json: String = result.as_string().ok_or(Error::BadJson)?;
+		let deleted_ids: Vec<Uid> = serde_json::from_str(&json).map_err(|_| Error::BadJson)?;
+
+		Ok(deleted_ids)
 	}
 
 	async fn get_master_key(&self, user_id: Uid) -> Result<encrypted::Encrypted, Error> {
