@@ -23,7 +23,7 @@ pub enum Error {
 const DEFAULT_CONFIG: Config = Config {
 	variant: Variant::Argon2id,
 	hash_length: hmac::Digest::SIZE as u32,
-	time_cost: 5,
+	time_cost: 3,
 	lanes: 4,
 	mem_cost: 64 * 1024,
 

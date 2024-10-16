@@ -943,6 +943,10 @@ impl Protocol {
 		Ok(())
 	}
 
+	pub fn is_pending_signup(&self) -> bool {
+		self.user.is_pending_signup()
+	}
+
 	// TODO: encrypt/decrypt announcement
 
 	// pub fn did_add_nodes(&mut self, locked_nodes: Vec<js_sys::Uint8Array>) {

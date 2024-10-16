@@ -54,7 +54,11 @@ pub struct User {
 }
 
 impl User {
-	fn is_god(&self) -> bool {
+	pub fn is_pending_signup(&self) -> bool {
+		self.imports.is_empty() && !self.is_god()
+	}
+
+	pub fn is_god(&self) -> bool {
 		self.identity.id() == GOD_ID
 	}
 
