@@ -21,14 +21,12 @@ pub enum Error {
 
 #[cfg(not(test))]
 const DEFAULT_CONFIG: Config = Config {
-	// irrelevant fields
 	variant: Variant::Argon2id,
 	hash_length: hmac::Digest::SIZE as u32,
-	time_cost: 2, // FIXME: find a good value
+	time_cost: 5,
 	lanes: 4,
 	mem_cost: 64 * 1024,
 
-	// relevant fields
 	ad: &[],
 	secret: &[],
 	version: Version::Version13,
@@ -37,14 +35,12 @@ const DEFAULT_CONFIG: Config = Config {
 
 #[cfg(test)]
 const DEFAULT_CONFIG: Config = Config {
-	// irrelevant fields
 	variant: Variant::Argon2id,
 	hash_length: hmac::Digest::SIZE as u32,
 	time_cost: 1,
 	lanes: 1,
 	mem_cost: 1 * 128,
 
-	// relevant fields
 	ad: &[],
 	secret: &[],
 	version: Version::Version13,
