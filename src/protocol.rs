@@ -116,10 +116,9 @@ impl DirView {
 pub struct NodeView {
 	id: Uid,
 	created_at: u64,
+	size: u32,
 	name: String,
 	ext: Option<String>,
-	// FIXME: expose size
-	// FIXME: expose uri_id
 }
 
 #[wasm_bindgen]
@@ -130,6 +129,10 @@ impl NodeView {
 
 	pub fn id(&self) -> Uid {
 		self.id
+	}
+
+	pub fn size(&self) -> u32 {
+		self.size
 	}
 
 	pub fn name(&self) -> String {
@@ -233,16 +236,17 @@ pub struct Protocol {
 
 impl From<Node> for NodeView {
 	fn from(node: Node) -> Self {
-		let ext = match node.entry {
-			vault::Entry::File { info } => Some(info.ext),
+		let (ext, size) = match node.entry {
+			vault::Entry::File { info } => (Some(info.ext), info.size),
 			vault::Entry::Dir {
 				seed: _,
 				children: _,
-			} => None,
+			} => (None, 0),
 		};
 
 		Self {
 			id: node.id,
+			size,
 			created_at: node.created_at,
 			name: node.name,
 			ext,
@@ -691,6 +695,7 @@ impl Protocol {
 						breadcrumbs.push(NodeView {
 							id: cur,
 							created_at: cur_node.map_or(0, |n| n.created_at),
+							size: 0,
 							name: cur_node.map_or("~".to_string(), |n| n.name.clone()),
 							ext: None,
 						});
@@ -771,10 +776,10 @@ impl Protocol {
 		}
 	}
 
-	pub async fn touch(&mut self, name: &str, ext: &str) -> Result<Uid, Error> {
+	pub async fn touch(&mut self, size: u32, name: &str, ext: &str) -> Result<Uid, Error> {
 		if let Some(cd) = self.cd {
 			let NewNodeReq { node, locked_node } =
-				self.user.fs.touch(cd, name, ext, &self.user.identity)?;
+				self.user.fs.touch(cd, size, name, ext, &self.user.identity)?;
 			// TODO: check response
 			self.net.upload_nodes(&vec![locked_node]).await?;
 			let id = self.user.fs.insert_node(node)?;

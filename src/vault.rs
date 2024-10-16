@@ -26,6 +26,7 @@ pub enum Error {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct FileInfo {
+	pub(crate) size: u32,
 	pub(crate) key_iv: Aes,
 	pub(crate) ext: String,
 }
@@ -756,11 +757,12 @@ impl FileSystem {
 	pub fn touch_mut(
 		&mut self,
 		parent_id: Uid,
+		size: u32,
 		name: &str,
 		ext: &str,
 		owner: &identity::Identity,
 	) -> Result<(Uid, LockedNode), Error> {
-		let NewNodeReq { node, locked_node } = self.touch(parent_id, name, ext, owner)?;
+		let NewNodeReq { node, locked_node } = self.touch(parent_id, size, name, ext, owner)?;
 		let id = self.insert_node(node)?;
 
 		Ok((id, locked_node))
@@ -769,6 +771,7 @@ impl FileSystem {
 	pub fn touch(
 		&self,
 		parent_id: Uid,
+		size: u32,
 		name: &str,
 		ext: &str,
 		owner: &identity::Identity,
@@ -787,6 +790,7 @@ impl FileSystem {
 					name: name.to_string(),
 					entry: Entry::File {
 						info: FileInfo {
+							size,
 							key_iv: Aes::new(),
 							ext: ext.to_string(),
 						},
@@ -861,7 +865,7 @@ mod tests {
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
 
 		assert_eq!(fs.ls_dir(Uid::new(ROOT_ID)).unwrap().len(), 1);
 		assert_eq!(fs.ls_dir(_1.0).unwrap().len(), 2);
@@ -888,7 +892,7 @@ mod tests {
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
 
 		let locked_nodes = vec![root, _1.1, _1_1.1, _1_2.1, _1_1_1.1, _1_1_1_atxt.1];
 
@@ -916,7 +920,7 @@ mod tests {
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
 
 		assert!(eval_share(&mut fs, _1_1_1_atxt.0, _1_1_1.0));
 		assert!(eval_share(&mut fs, _1_1_1.0, _1_1.0));
@@ -942,7 +946,7 @@ mod tests {
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
 
 		let share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let locked_nodes = vec![root, _1_1_1_atxt.1, _1.1, _1_1_1.1, _1_2.1, _1_1.1];
@@ -965,11 +969,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_ctxt = fs.touch_mut(_1_1.0, "c", "txt", &god).unwrap();
+		let _1_1_ctxt = fs.touch_mut(_1_1.0, 0, "c", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
 		let _1_1_1_b_share = fs.share_node(_1_1_1_btxt.0).unwrap();
@@ -1014,11 +1018,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 
 		let _1_1_1_share = fs.share_node(_1_1_1.0).unwrap();
 		let _1_2_share = fs.share_node(_1_2.0).unwrap();
@@ -1056,11 +1060,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -1107,11 +1111,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -1171,11 +1175,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let mut fs_copy = fs.clone();
@@ -1218,11 +1222,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let mut fs_copy = fs.clone();
@@ -1231,7 +1235,7 @@ mod tests {
 		// add a few new nodes to a leaf dir
 		let _1_1_1_1_1 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_1", &god).unwrap();
 		let _1_1_1_1_2 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_2", &god).unwrap();
-		let _1_1_1_1_atxt = fs.touch_mut(_1_1_1_1.0, "_1_1_1_1_a", "txt", &god).unwrap();
+		let _1_1_1_1_atxt = fs.touch_mut(_1_1_1_1.0, 0, "_1_1_1_1_a", "txt", &god).unwrap();
 
 		assert_eq!(fs.ls_dir(_1_1_1_1.0).unwrap().len(), 3);
 
@@ -1269,11 +1273,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -1321,11 +1325,11 @@ mod tests {
 
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
@@ -1377,11 +1381,11 @@ mod tests {
 		let _1 = fs.mkdir_mut(Uid::new(ROOT_ID), "1", &god).unwrap();
 		let _2 = fs.mkdir_mut(Uid::new(ROOT_ID), "2", &god).unwrap();
 		let _1_1 = fs.mkdir_mut(_1.0, "1_1", &god).unwrap();
-		let _1_1_atxt = fs.touch_mut(_1_1.0, "a1", "txt", &god).unwrap();
+		let _1_1_atxt = fs.touch_mut(_1_1.0, 0, "a1", "txt", &god).unwrap();
 		let _1_2 = fs.mkdir_mut(_1.0, "1_2", &god).unwrap();
 		let _1_1_1 = fs.mkdir_mut(_1_1.0, "1_1_1", &god).unwrap();
-		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, "a", "txt", &god).unwrap();
-		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, "b", "txt", &god).unwrap();
+		let _1_1_1_atxt = fs.touch_mut(_1_1_1.0, 0, "a", "txt", &god).unwrap();
+		let _1_1_1_btxt = fs.touch_mut(_1_1_1.0, 0, "b", "txt", &god).unwrap();
 		let _1_1_1_1 = fs.mkdir_mut(_1_1_1.0, "1_1_1_1", &god).unwrap();
 
 		let _1_1_1_a_share = fs.share_node(_1_1_1_atxt.0).unwrap();
