@@ -174,7 +174,7 @@ impl User {
 		let root = hkdf::Hkdf::from_ikm(
 			&[
 				identity.x448.as_bytes(),
-				identity.ed448.as_bytes().as_slice(),
+				identity.ed25519.as_bytes().as_slice(),
 			]
 			.concat(),
 		)

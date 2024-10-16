@@ -19,7 +19,7 @@ pub struct Identity {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Private {
 	pub(crate) x448: PrivateKeyX448,
-	pub(crate) ed448: PrivateKeyEd25519,
+	pub(crate) ed25519: PrivateKeyEd25519,
 	pub(crate) kyber: PrivateKeyKyber,
 }
 
@@ -40,7 +40,7 @@ impl Private {
 	}
 
 	pub fn sign(&self, msg: &[u8]) -> Signature {
-		self.ed448.sign(msg)
+		self.ed25519.sign(msg)
 	}
 }
 
@@ -50,7 +50,7 @@ pub struct Public {
 	pub(crate) id: Uid,
 	// can be used to encrypt messages to or verify signatures against
 	pub(crate) x448: PublicKeyX448,
-	pub(crate) ed448: PublicKeyEd25519,
+	pub(crate) ed25519: PublicKeyEd25519,
 	pub(crate) kyber: PublicKeyKyber,
 }
 
@@ -68,7 +68,7 @@ pub struct Encrypted {
 
 impl Public {
 	pub fn id(&self) -> Uid {
-		// id::from_bytes(&[self.x448.as_bytes(), self.ed448.as_bytes().as_slice()].concat())
+		// id::from_bytes(&[self.x448.as_bytes(), self.ed25519.as_bytes().as_slice()].concat())
 		self.id
 	}
 
@@ -82,13 +82,13 @@ impl Public {
 	}
 
 	pub fn verify(&self, sig: &Signature, msg: &[u8]) -> bool {
-		self.ed448.verify(msg, sig)
+		self.ed25519.verify(msg, sig)
 	}
 
 	pub fn hash(&self) -> hmac::Digest {
 		let bytes = [
 			self.x448.as_bytes().as_slice(),
-			self.ed448.as_bytes(),
+			self.ed25519.as_bytes(),
 			self.kyber.as_bytes(),
 			&self.id().as_bytes(),
 		]
@@ -122,8 +122,8 @@ impl Identity {
 			public: x448_pub,
 		} = KeyPairX448::generate();
 		let KeyPairEd25519 {
-			private: ed448_priv,
-			public: ed448_pub,
+			private: ed25519_priv,
+			public: ed25519_pub,
 		} = KeyPairEd25519::generate();
 		let KeyPairKyber {
 			private: kyber_priv,
@@ -133,13 +133,13 @@ impl Identity {
 		Self {
 			_priv: Private {
 				x448: x448_priv,
-				ed448: ed448_priv,
+				ed25519: ed25519_priv,
 				kyber: kyber_priv,
 			},
 			_pub: Public {
 				id: id,
 				x448: x448_pub,
-				ed448: ed448_pub,
+				ed25519: ed25519_pub,
 				kyber: kyber_pub,
 			},
 		}

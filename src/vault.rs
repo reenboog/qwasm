@@ -26,7 +26,6 @@ pub enum Error {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct FileInfo {
-	// FIXME: add file size
 	pub(crate) key_iv: Aes,
 	pub(crate) ext: String,
 }
