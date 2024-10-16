@@ -27,8 +27,6 @@ pub enum Error {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct FileInfo {
 	// FIXME: add file size
-	// FIXME: use this insted of node id to upload data
-	pub(crate) uri_id: Uid,
 	pub(crate) key_iv: Aes,
 	pub(crate) ext: String,
 }
@@ -47,7 +45,6 @@ impl LockedEntry {
 
 		let bytes = match self {
 			File { info } => [
-				info.uri_id.as_bytes().as_slice(),
 				&info.key_iv.as_bytes(),
 				info.ext.as_bytes(),
 			]
@@ -791,7 +788,6 @@ impl FileSystem {
 					name: name.to_string(),
 					entry: Entry::File {
 						info: FileInfo {
-							uri_id: Uid::generate(),
 							key_iv: Aes::new(),
 							ext: ext.to_string(),
 						},
