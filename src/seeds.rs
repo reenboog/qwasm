@@ -134,8 +134,29 @@ pub struct InviteIntent {
 }
 
 impl InviteIntent {
-	pub(crate) fn ctx_to_sign(sender: &Uid, email: &str, receiver: &Uid) -> Vec<u8> {
-		[&sender.as_bytes(), email.as_bytes(), &receiver.as_bytes()].concat()
+	pub(crate) fn ctx_to_sign(
+		sender: &Uid,
+		email: &str,
+		receiver: &Uid,
+		fs_ids: Option<&[Uid]>,
+		db_ids: Option<&[database::Index]>,
+	) -> Vec<u8> {
+		[
+			&sender.as_bytes(),
+			email.as_bytes(),
+			&receiver.as_bytes(),
+			&fs_ids
+				.map_or(vec![], |fs_id| {
+					fs_id.iter().map(|uid| uid.as_bytes()).collect()
+				})
+				.concat(),
+			&db_ids
+				.map_or(vec![], |db_id| {
+					db_id.iter().map(|idx| idx.as_id().as_bytes()).collect()
+				})
+				.concat(),
+		]
+		.concat()
 	}
 }
 

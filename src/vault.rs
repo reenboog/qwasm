@@ -44,11 +44,7 @@ impl LockedEntry {
 		use LockedEntry::*;
 
 		let bytes = match self {
-			File { info } => [
-				&info.key_iv.as_bytes(),
-				info.ext.as_bytes(),
-			]
-			.concat(),
+			File { info } => [&info.key_iv.as_bytes(), info.ext.as_bytes()].concat(),
 			Dir { seed } => seed.bytes.to_vec(),
 		};
 
@@ -738,7 +734,8 @@ impl FileSystem {
 				if let Entry::Dir {
 					ref mut children,
 					seed: _,
-				} = parent.entry {
+				} = parent.entry
+				{
 					children.retain(|n| n.id != id);
 
 					return Ok(());
@@ -749,7 +746,7 @@ impl FileSystem {
 			}
 		}
 
-		return  Err(Error::NotFound)
+		return Err(Error::NotFound);
 	}
 
 	// touch and immediately apply its transaction
@@ -1235,7 +1232,9 @@ mod tests {
 		// add a few new nodes to a leaf dir
 		let _1_1_1_1_1 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_1", &god).unwrap();
 		let _1_1_1_1_2 = fs.mkdir_mut(_1_1_1_1.0, "_1_1_1_1_2", &god).unwrap();
-		let _1_1_1_1_atxt = fs.touch_mut(_1_1_1_1.0, 0, "_1_1_1_1_a", "txt", &god).unwrap();
+		let _1_1_1_1_atxt = fs
+			.touch_mut(_1_1_1_1.0, 0, "_1_1_1_1_a", "txt", &god)
+			.unwrap();
 
 		assert_eq!(fs.ls_dir(_1_1_1_1.0).unwrap().len(), 3);
 

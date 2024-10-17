@@ -4,7 +4,8 @@ use sha2::{Digest, Sha256};
 use crate::{
 	aes_gcm,
 	base64_blobs::{deserialize_vec_base64, serialize_vec_base64},
-	ed25519::{KeyPairEd25519, PrivateKeyEd25519, PublicKeyEd25519, Signature}, hmac,
+	ed25519::{KeyPairEd25519, PrivateKeyEd25519, PublicKeyEd25519, Signature},
+	hmac,
 	id::Uid,
 	kyber::{self, KeyPairKyber, PrivateKeyKyber, PublicKeyKyber},
 	x448::{self, KeyPairX448, PrivateKeyX448, PublicKeyX448},

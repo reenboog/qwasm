@@ -779,7 +779,9 @@ impl Protocol {
 	pub async fn touch(&mut self, size: u32, name: &str, ext: &str) -> Result<Uid, Error> {
 		if let Some(cd) = self.cd {
 			let NewNodeReq { node, locked_node } =
-				self.user.fs.touch(cd, size, name, ext, &self.user.identity)?;
+				self.user
+					.fs
+					.touch(cd, size, name, ext, &self.user.identity)?;
 			// TODO: check response
 			self.net.upload_nodes(&vec![locked_node]).await?;
 			let id = self.user.fs.insert_node(node)?;
@@ -794,7 +796,11 @@ impl Protocol {
 	pub async fn delete_node(&mut self, id: &Uid) -> Result<(), Error> {
 		// delete_nodes returns a list of all deleted nodes and their direct/indirect children
 		// TODO: use deleted_nodes to refresh, if dirty
-		let _deleted_nodes = self.net.delete_nodes(&[*id]).await.map_err(|_| Error::BadOperation)?;
+		let _deleted_nodes = self
+			.net
+			.delete_nodes(&[*id])
+			.await
+			.map_err(|_| Error::BadOperation)?;
 		self.user.fs.delete_node(*id).map_err(|_| Error::NotFound)?;
 
 		Ok(())
@@ -890,23 +896,7 @@ impl Protocol {
 		&mut self,
 		intents: &[InviteIntent],
 	) -> Result<(), Error> {
-		let intents: Vec<_> = intents
-			.iter()
-			.filter_map(|int| {
-				if int.receiver.is_some() && int.sender.id() == self.user.identity.id() {
-					Some(FinishInviteIntent {
-						email: int.email.clone(),
-						share: self.user.export_seeds_to_identity(
-							int.fs_ids.as_deref(),
-							int.db_ids.as_deref(),
-							int.receiver.as_ref().unwrap(),
-						),
-					})
-				} else {
-					None
-				}
-			})
-			.collect();
+		let intents = self.user.finish_invite_intents(intents);
 
 		if !intents.is_empty() {
 			self.net.finish_invite_intents(&intents).await?;

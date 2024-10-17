@@ -89,7 +89,13 @@ pub(crate) fn signup_as_admin_no_pin(
 	pass: &str,
 	intent: InviteIntent,
 ) -> Result<LockedUser, Error> {
-	let to_sign = InviteIntent::ctx_to_sign(&intent.sender.id(), &email, &intent.user_id);
+	let to_sign = InviteIntent::ctx_to_sign(
+		&intent.sender.id(),
+		&email,
+		&intent.user_id,
+		intent.fs_ids.as_deref(),
+		intent.db_ids.as_deref(),
+	);
 
 	if intent.sender.verify(&intent.sig, &to_sign) && email == intent.email {
 		let identity = identity::Identity::generate(intent.user_id);

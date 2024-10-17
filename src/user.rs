@@ -12,7 +12,8 @@ use crate::{
 	register::LockedUser,
 	salt::Salt,
 	seeds::{
-		self, ctx_to_sign, Bundle, Export, Import, Invite, InviteIntent, Seed, Sorted, ROOT_ID,
+		self, ctx_to_sign, Bundle, Export, FinishInviteIntent, Import, Invite, InviteIntent, Seed,
+		Sorted, ROOT_ID,
 	},
 	vault::FileSystem,
 };
@@ -206,7 +207,8 @@ impl User {
 		// no need to check access level at this stage for it may (or may not) change
 		// by the moment this intent is acknowledged – check *then* instead
 		let user_id = Uid::generate();
-		let to_sign = InviteIntent::ctx_to_sign(&self.identity.id(), email, &user_id);
+		let to_sign =
+			InviteIntent::ctx_to_sign(&self.identity.id(), email, &user_id, fs_ids, db_ids);
 		let sig = self.identity.private().sign(&to_sign);
 
 		InviteIntent {
@@ -267,6 +269,38 @@ impl User {
 			export,
 			sig,
 		}
+	}
+
+	pub fn finish_invite_intents(&mut self, intents: &[InviteIntent]) -> Vec<FinishInviteIntent> {
+		intents
+			.iter()
+			.filter_map(|int| {
+				let to_sign = InviteIntent::ctx_to_sign(
+					&int.sender.id(),
+					&int.email,
+					&int.user_id,
+					int.fs_ids.as_deref(),
+					int.db_ids.as_deref(),
+				);
+
+				// verify these intents to make sure the backend didn't add ids, nor didn't change anything else
+				if int.receiver.is_some()
+					&& int.sender.id() == self.identity.id()
+					&& int.sender.verify(&int.sig, &to_sign)
+				{
+					Some(FinishInviteIntent {
+						email: int.email.clone(),
+						share: self.export_seeds_to_identity(
+							int.fs_ids.as_deref(),
+							int.db_ids.as_deref(),
+							int.receiver.as_ref().unwrap(),
+						),
+					})
+				} else {
+					None
+				}
+			})
+			.collect()
 	}
 }
 
