@@ -97,7 +97,7 @@ pub(crate) fn signup_as_admin_no_pin(
 		intent.db_ids.as_deref(),
 	);
 
-	if intent.sender.verify(&intent.sig, &to_sign) && email == intent.email {
+	if intent.sender.verify(&intent.sig, &to_sign) && email == intent.ref_src {
 		let identity = identity::Identity::generate(intent.user_id);
 		let locked_priv = password_lock::lock(identity.private(), pass).unwrap();
 

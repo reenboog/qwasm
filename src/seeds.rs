@@ -8,7 +8,7 @@ use crate::{
 	base64_blobs::{deserialize_array_base64, serialize_array_base64},
 	database, ed25519, hmac,
 	id::Uid,
-	identity, password_lock, user,
+	identity, password_lock,
 	vault::LockedNode,
 };
 
@@ -105,12 +105,13 @@ pub struct LockedShare {
 	pub(crate) sig: ed25519::Signature,
 }
 
+// used by pin-based invites only
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Invite {
 	pub(crate) user_id: Uid,
 	// pin needs to be shared through a trusted channel, so no need to sign
 	pub(crate) sender: identity::Public,
-	pub(crate) email: String,
+	pub(crate) ref_src: String,
 	// encrypted Bundle
 	pub(crate) payload: password_lock::Lock,
 	pub(crate) export: Export,
@@ -121,9 +122,10 @@ pub struct Invite {
 // a pin-less invite intent that should be later acknowledged
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct InviteIntent {
-	pub(crate) email: String,
+	// email or activation code – anything used to sign up
+	pub(crate) ref_src: String,
 	pub(crate) sender: identity::Public,
-	// sign(sender + email + receiver)
+	// sign(sender + ref_src + user_id)
 	pub(crate) sig: ed25519::Signature,
 	pub(crate) user_id: Uid,
 	// receiver's pk which the sender is to use to finally encrypt the previously selected seeds
@@ -136,14 +138,14 @@ pub struct InviteIntent {
 impl InviteIntent {
 	pub(crate) fn ctx_to_sign(
 		sender: &Uid,
-		email: &str,
+		ref_src: &str,
 		receiver: &Uid,
 		fs_ids: Option<&[Uid]>,
 		db_ids: Option<&[database::Index]>,
 	) -> Vec<u8> {
 		[
 			&sender.as_bytes(),
-			email.as_bytes(),
+			ref_src.as_bytes(),
 			&receiver.as_bytes(),
 			&fs_ids
 				.map_or(vec![], |fs_id| {
@@ -162,15 +164,15 @@ impl InviteIntent {
 
 #[derive(Serialize, Deserialize)]
 pub struct FinishInviteIntent {
-	pub(crate) email: String,
+	pub(crate) ref_src: String,
 	pub(crate) share: LockedShare,
 }
 
+// used by pin-based invites only
 #[derive(Serialize, Deserialize)]
 pub struct Welcome {
 	pub(crate) user_id: Uid,
 	pub(crate) sender: identity::Public,
-	// email?
 	pub(crate) imports: password_lock::Lock,
 	// = Invite::sig
 	pub(crate) sig: ed25519::Signature,

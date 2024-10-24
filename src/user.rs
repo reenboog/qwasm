@@ -28,17 +28,17 @@ pub enum Error {
 	NoAccess,
 }
 
+// used by admins only, so it's email-based signup
 #[derive(Serialize, Deserialize)]
 pub struct Signup {
 	pub email: String,
-	pub pass: String,
 	pub user: LockedUser,
 }
 
+// used by admins only, so it's email-based login
 #[derive(Serialize, Deserialize)]
 pub struct Login {
 	pub email: String,
-	pub pass: String,
 }
 
 pub(crate) const GOD_ID: u64 = 0;
@@ -198,6 +198,18 @@ impl User {
 		Self::derive_seed_with_label(identity, b"fs")
 	}
 
+	// at this moment user_id should already be associated with code
+	pub fn start_invite_intent_with_seeds_for_activation_code(
+		&self,
+		code: &str,
+		user_id: Uid,
+		fs_ids: Option<&[Uid]>,
+		db_ids: Option<&[database::Index]>,
+	) -> () {
+		// TODO: reuse InviteIntent
+		// user_id should be ready by now
+	}
+
 	pub fn start_invite_intent_with_seeds_for_email(
 		&self,
 		email: &str,
@@ -211,8 +223,9 @@ impl User {
 			InviteIntent::ctx_to_sign(&self.identity.id(), email, &user_id, fs_ids, db_ids);
 		let sig = self.identity.private().sign(&to_sign);
 
+		// could be saved indefinitely for audit purposes
 		InviteIntent {
-			email: email.to_string(),
+			ref_src: email.to_string(),
 			sender: self.identity.public().clone(),
 			sig,
 			user_id,
@@ -221,6 +234,8 @@ impl User {
 			db_ids: db_ids.and_then(|ids| Some(ids.iter().cloned().collect())),
 		}
 	}
+
+	// so, an identity can be built from Mode public keys + user_id
 
 	pub fn export_seeds_to_identity(
 		&mut self,
@@ -232,6 +247,7 @@ impl User {
 		let _pub = self.identity.public();
 		let encrypted = receiver.encrypt(&bundle);
 		let export = Export::from_bundle(&bundle, receiver.id());
+		// sign('I share these file/db ids with this recipient')
 		let sig = self.identity.private().sign(&ctx_to_sign(_pub, &export));
 
 		seeds::LockedShare {
@@ -264,7 +280,7 @@ impl User {
 		Invite {
 			user_id: receiver_id,
 			sender: self.identity.public().clone(),
-			email: email.to_string(),
+			ref_src: email.to_string(),
 			payload,
 			export,
 			sig,
@@ -277,7 +293,7 @@ impl User {
 			.filter_map(|int| {
 				let to_sign = InviteIntent::ctx_to_sign(
 					&int.sender.id(),
-					&int.email,
+					&int.ref_src,
 					&int.user_id,
 					int.fs_ids.as_deref(),
 					int.db_ids.as_deref(),
@@ -289,7 +305,7 @@ impl User {
 					&& int.sender.verify(&int.sig, &to_sign)
 				{
 					Some(FinishInviteIntent {
-						email: int.email.clone(),
+						ref_src: int.ref_src.clone(),
 						share: self.export_seeds_to_identity(
 							int.fs_ids.as_deref(),
 							int.db_ids.as_deref(),
@@ -408,6 +424,8 @@ pub fn unlock_with_master_key(locked: &LockedUser, mk: &aes_gcm::Aes) -> Result<
 	// TODO: alternatively, a log could be introduced to collect any forged shares for manual inspection
 
 	// filter locked shares for export and import
+	
+	// do the same for Mode users?
 	let imports = locked
 		.shares
 		.iter()
@@ -470,6 +488,8 @@ pub fn unlock_with_master_key(locked: &LockedUser, mk: &aes_gcm::Aes) -> Result<
 	} else {
 		imports.iter().flat_map(|im| im.bundle.fs.clone()).collect()
 	};
+	
+	// this is what is required for a Mode user to rebuild
 	let fs = FileSystem::from_locked_nodes(&locked.roots, &bundles);
 
 	Ok(User {

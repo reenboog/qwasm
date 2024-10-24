@@ -159,7 +159,7 @@ pub(crate) trait Network {
 	async fn get_invite(&self, email: &str) -> Result<Welcome, Error>;
 	async fn invite(&self, invite: &Invite) -> Result<(), Error>;
 	async fn start_invite_intent(&self, intent: &InviteIntent) -> Result<(), Error>;
-	async fn get_invite_intent(&self, email: &str) -> Result<InviteIntent, Error>;
+	async fn get_invite_intent(&self, ref_src: &str) -> Result<InviteIntent, Error>;
 	async fn finish_invite_intents(
 		&self,
 		intents: &[seeds::FinishInviteIntent],
@@ -393,7 +393,6 @@ impl Protocol {
 
 		net.signup(user::Signup {
 			email: email.to_string(),
-			pass: pass.to_string(),
 			user: locked_user,
 		})
 		.await?;
@@ -424,7 +423,6 @@ impl Protocol {
 
 		net.signup(user::Signup {
 			email: email.to_string(),
-			pass: pass.to_string(),
 			user: locked_user,
 		})
 		.await?;
@@ -452,7 +450,6 @@ impl Protocol {
 
 		net.signup(user::Signup {
 			email: email.to_string(),
-			pass: pass.to_string(),
 			user: locked_user,
 		})
 		.await?;
@@ -480,7 +477,6 @@ impl Protocol {
 		let locked_user = net
 			.login(user::Login {
 				email: email.to_string(),
-				pass: pass.to_string(),
 			})
 			.await?;
 		let user = user::unlock_with_pass(pass, &locked_user).map_err(|e| match e {

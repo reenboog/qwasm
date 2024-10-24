@@ -199,14 +199,14 @@ impl Network for JsNet {
 		Ok(user)
 	}
 
-	async fn get_invite(&self, email: &str) -> Result<Welcome, Error> {
+	async fn get_invite(&self, ref_src: &str) -> Result<Welcome, Error> {
 		let this = JsValue::NULL;
 		// IMPORTANT: base64-encoded to avoid invalid paths, eg GET /invite/alex@mode.io
-		let email = base64::encode_config(email, base64::URL_SAFE);
-		let email = JsValue::from(email);
+		let ref_src = base64::encode_config(ref_src, base64::URL_SAFE);
+		let ref_src = JsValue::from(ref_src);
 		let promise = self
 			.get_invite
-			.call1(&this, &email)
+			.call1(&this, &ref_src)
 			.map_err(|_| Error::JsViolated)?;
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
 		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
@@ -244,14 +244,14 @@ impl Network for JsNet {
 		Ok(())
 	}
 
-	async fn get_invite_intent(&self, email: &str) -> Result<InviteIntent, Error> {
+	async fn get_invite_intent(&self, ref_src: &str) -> Result<InviteIntent, Error> {
 		// IMPORTANT: base64-encoded to avoid invalid paths, eg GET /invite/alex@mode.io
-		let email = base64::encode_config(email, base64::URL_SAFE);
-		let email = JsValue::from(email);
+		let ref_src = base64::encode_config(ref_src, base64::URL_SAFE);
+		let ref_src = JsValue::from(ref_src);
 		let this = JsValue::NULL;
 		let promise = self
 			.get_invite_intent
-			.call1(&this, &email)
+			.call1(&this, &ref_src)
 			.map_err(|_| Error::JsViolated)?;
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
 		let result = js_future.await.map_err(|e| Error::NoNetwork(e))?;
