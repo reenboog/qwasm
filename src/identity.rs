@@ -8,6 +8,7 @@ use crate::{
 	hmac,
 	id::Uid,
 	kyber::{self, KeyPairKyber, PrivateKeyKyber, PublicKeyKyber},
+	user::GOD_ID,
 	x448::{self, KeyPairX448, PrivateKeyX448, PublicKeyX448},
 };
 
@@ -71,6 +72,10 @@ impl Public {
 	pub fn id(&self) -> Uid {
 		// id::from_bytes(&[self.x448.as_bytes(), self.ed25519.as_bytes().as_slice()].concat())
 		self.id
+	}
+
+	pub fn is_god(&self) -> bool {
+		self.id == GOD_ID
 	}
 
 	pub fn encrypt_serialized(&self, pt: &[u8]) -> Encrypted {

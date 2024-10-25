@@ -12,10 +12,10 @@ use crate::{
 	register::LockedUser,
 	salt::Salt,
 	seeds::{
-		self, ctx_to_sign, Bundle, Export, FinishInviteIntent, Import, Invite, InviteIntent, Seed,
-		Sorted, ROOT_ID,
+		self, ctx_to_sign, Bundle, Export, FinishInviteIntent, Import, Invite, InviteIntent,
+		LockedShare, Seed, Sorted, ROOT_ID,
 	},
-	vault::FileSystem,
+	vault::{FileSystem, LockedNode},
 };
 
 #[derive(Debug, PartialEq)]
@@ -198,34 +198,21 @@ impl User {
 		Self::derive_seed_with_label(identity, b"fs")
 	}
 
-	// at this moment user_id should already be associated with code
-	pub fn start_invite_intent_with_seeds_for_activation_code(
+	// user_id should be known; ref_src is either activatin code or email
+	pub fn start_invite_intent_with_seeds_for_ref_src(
 		&self,
-		code: &str,
+		ref_src: &str,
 		user_id: Uid,
 		fs_ids: Option<&[Uid]>,
 		db_ids: Option<&[database::Index]>,
-	) -> () {
-		// TODO: reuse InviteIntent
-		// user_id should be ready by now
-	}
-
-	pub fn start_invite_intent_with_seeds_for_email(
-		&self,
-		email: &str,
-		fs_ids: Option<&[Uid]>,
-		db_ids: Option<&[database::Index]>,
 	) -> InviteIntent {
-		// no need to check access level at this stage for it may (or may not) change
-		// by the moment this intent is acknowledged – check *then* instead
-		let user_id = Uid::generate();
 		let to_sign =
-			InviteIntent::ctx_to_sign(&self.identity.id(), email, &user_id, fs_ids, db_ids);
+			InviteIntent::ctx_to_sign(&self.identity.id(), ref_src, &user_id, fs_ids, db_ids);
 		let sig = self.identity.private().sign(&to_sign);
 
 		// could be saved indefinitely for audit purposes
 		InviteIntent {
-			ref_src: email.to_string(),
+			ref_src: ref_src.to_string(),
 			sender: self.identity.public().clone(),
 			sig,
 			user_id,
@@ -236,7 +223,6 @@ impl User {
 	}
 
 	// so, an identity can be built from Mode public keys + user_id
-
 	pub fn export_seeds_to_identity(
 		&mut self,
 		fs_ids: Option<&[Uid]>,
@@ -408,41 +394,47 @@ impl User {
 	}
 }
 
+// used by password-protected accounts only (only admins currently)
 pub fn unlock_with_master_key(locked: &LockedUser, mk: &aes_gcm::Aes) -> Result<User, Error> {
-	let decrypted_priv = password_lock::unlock_with_master_key(mk, &locked.encrypted_priv.ct)
-		.map_err(|_| Error::BadKey)?;
+	let _priv = locked.encrypted_priv.as_ref().ok_or(Error::CorruptData)?;
+	let decrypted_priv =
+		password_lock::unlock_with_master_key(mk, &_priv.ct).map_err(|_| Error::BadKey)?;
 
 	let _priv: identity::Private =
 		serde_json::from_slice(&decrypted_priv).map_err(|_| Error::BadJson)?;
 
+	unlock_with_params(&_priv, &locked._pub, &locked.shares, &locked.roots)
+}
+
+pub(crate) fn unlock_with_params(
+	_priv: &identity::Private,
+	_pub: &identity::Public,
+	shares: &[LockedShare],
+	roots: &[LockedNode],
+) -> Result<User, Error> {
 	// for god, there should be one LockedNode (or more, if root's children) and no imports, so
 	// use use.fs_seed instead for admins, there could be several LockedNodes (subroots +
 	// children depending on depth) and LockedShares needed to decrypt the nodes
 
 	// failing always, even if there's just one forged share is not an option, since it's a potential
-	// ddos initiated by a compromised serve basically hence, I simply ignore any fake shares
+	// ddos initiated by a compromised server basically, hence, I simply ignore any fake shares
 	// TODO: alternatively, a log could be introduced to collect any forged shares for manual inspection
 
 	// filter locked shares for export and import
-	
-	// do the same for Mode users?
-	let imports = locked
-		.shares
+
+	let imports = shares
 		.iter()
 		.filter_map(|s| {
-			if s.export.receiver == locked.id() {
+			if s.export.receiver == _pub.id() {
 				if let Ok(ref bytes) = _priv.decrypt(&s.payload) {
 					if let Ok(bundle) = serde_json::from_slice::<Bundle>(bytes) {
 						let to_sign = ctx_to_sign(&s.sender, &s.export);
 						// make sure exports haven't been forged: verify sig + quantity
 						if s.sender.verify(&s.sig, &to_sign)
 							&& bundle.fs.keys().cloned().collect::<Vec<_>>().sorted()
-								== s.export.fs.sorted() && bundle
-							.db
-							.keys()
-							.cloned()
-							.collect::<Vec<_>>()
-							.sorted() == s.export.db.sorted()
+								== s.export.fs.sorted()
+							&& bundle.db.keys().cloned().collect::<Vec<_>>().sorted()
+								== s.export.db.sorted()
 						{
 							Some(Import {
 								sender: s.sender.clone(),
@@ -462,12 +454,11 @@ pub fn unlock_with_master_key(locked: &LockedUser, mk: &aes_gcm::Aes) -> Result<
 			}
 		})
 		.collect::<Vec<_>>();
-	let exports = locked
-		.shares
+	let exports = shares
 		.iter()
 		.filter_map(|s| {
 			// I can't decrypt payloads here, since each is encrypted to a recipient's public key
-			if s.sender.id() == locked.id() {
+			if s.sender.id() == _pub.id() {
 				let to_sign = ctx_to_sign(&s.sender, &s.export);
 
 				if s.sender.verify(&s.sig, &to_sign) {
@@ -481,21 +472,21 @@ pub fn unlock_with_master_key(locked: &LockedUser, mk: &aes_gcm::Aes) -> Result<
 		})
 		.collect();
 
-	let bundles = if locked.is_god() {
+	let bundles = if _pub.is_god() {
 		[(Uid::new(ROOT_ID), User::fs_seed(&_priv))]
 			.into_iter()
 			.collect()
 	} else {
 		imports.iter().flat_map(|im| im.bundle.fs.clone()).collect()
 	};
-	
+
 	// this is what is required for a Mode user to rebuild
-	let fs = FileSystem::from_locked_nodes(&locked.roots, &bundles);
+	let fs = FileSystem::from_locked_nodes(&roots, &bundles);
 
 	Ok(User {
 		identity: Identity {
 			_priv: _priv.clone(),
-			_pub: locked._pub.clone(),
+			_pub: _pub.clone(),
 		},
 		imports,
 		exports,
@@ -504,8 +495,9 @@ pub fn unlock_with_master_key(locked: &LockedUser, mk: &aes_gcm::Aes) -> Result<
 }
 
 pub fn unlock_with_pass(pass: &str, locked: &LockedUser) -> Result<User, Error> {
-	let mk = password_lock::decrypt_master_key(&locked.encrypted_priv.master_key, pass)
-		.map_err(|_| Error::WrongPass)?;
+	let _priv = locked.encrypted_priv.as_ref().ok_or(Error::CorruptData)?;
+	let mk =
+		password_lock::decrypt_master_key(&_priv.master_key, pass).map_err(|_| Error::WrongPass)?;
 
 	unlock_with_master_key(locked, &mk)
 }

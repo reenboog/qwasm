@@ -164,6 +164,7 @@ impl InviteIntent {
 
 #[derive(Serialize, Deserialize)]
 pub struct FinishInviteIntent {
+	// email or activation code
 	pub(crate) ref_src: String,
 	pub(crate) share: LockedShare,
 }

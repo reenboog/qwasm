@@ -6,7 +6,7 @@ use crate::{
 	identity::{self},
 	password_lock,
 	seeds::{self, Bundle, Export, Import, InviteIntent, LockedShare, Welcome},
-	user::{self, User, GOD_ID},
+	user::{self, User},
 	vault::{FileSystem, LockedNode},
 };
 
@@ -20,9 +20,8 @@ pub enum Error {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct LockedUser {
-	// password-encrypted identity::Private
-	// aes_encrypted?
-	pub(crate) encrypted_priv: password_lock::Lock,
+	// password-encrypted identity::Private; used by admins only
+	pub(crate) encrypted_priv: Option<password_lock::Lock>,
 	#[serde(rename = "pub")]
 	pub(crate) _pub: identity::Public,
 	// exports & imports will be decoded from this; god has empty imports, always
@@ -33,16 +32,6 @@ pub struct LockedUser {
 	// get_nodes(locked_shares(user_id == share.receiver | user_id == 0 then node_id_root).export.fs.ids + children)
 	// TODO: include a hash of the hierarchy for later checks
 	pub(crate) roots: Vec<LockedNode>,
-}
-
-impl LockedUser {
-	pub fn id(&self) -> Uid {
-		self._pub.id()
-	}
-
-	pub fn is_god(&self) -> bool {
-		self._pub.id() == GOD_ID
-	}
 }
 
 #[derive(PartialEq, Debug)]
@@ -102,7 +91,7 @@ pub(crate) fn signup_as_admin_no_pin(
 		let locked_priv = password_lock::lock(identity.private(), pass).unwrap();
 
 		Ok(LockedUser {
-			encrypted_priv: locked_priv,
+			encrypted_priv: Some(locked_priv),
 			_pub: identity.public().clone(),
 			shares: Vec::new(),
 			roots: Vec::new(),
@@ -147,7 +136,7 @@ fn signup_with_params(
 		.collect::<Result<_, _>>()?;
 
 	let locked_user = LockedUser {
-		encrypted_priv: locked_priv,
+		encrypted_priv: Some(locked_priv),
 		_pub: _pub.clone(),
 		shares,
 		roots: nodes_to_upload,
@@ -270,7 +259,12 @@ mod tests {
 		_ = god.fs.insert_node(node.clone());
 		let admin_email = "admin@mail.com";
 		// 1 create an intent
-		let intent = god.start_invite_intent_with_seeds_for_email(admin_email, None, None);
+		let intent = god.start_invite_intent_with_seeds_for_ref_src(
+			admin_email,
+			Uid::generate(),
+			None,
+			None,
+		);
 		let admin_pass = "123";
 		// 2 prentend to have fetch the intent & signup
 		let mut locked_admin =

@@ -12,7 +12,7 @@ use crate::{
 	js_net::JsNet,
 	password_lock,
 	register::{self, LockedUser, NewUser},
-	seeds::{self, FinishInviteIntent, Invite, InviteIntent, Seed, Welcome, ROOT_ID},
+	seeds::{self, Invite, InviteIntent, Seed, Welcome, ROOT_ID},
 	session,
 	user::{self, User},
 	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
@@ -905,9 +905,10 @@ impl Protocol {
 		&mut self,
 		email: &str,
 	) -> Result<(), Error> {
+		let user_id = Uid::generate();
 		let intent = self
 			.user
-			.start_invite_intent_with_seeds_for_email(email, None, None);
+			.start_invite_intent_with_seeds_for_ref_src(email, user_id, None, None);
 
 		self.net.start_invite_intent(&intent).await?;
 
