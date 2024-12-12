@@ -3,7 +3,7 @@ use crate::{
 	id::Uid,
 	protocol::{Error, Network},
 	register::LockedUser,
-	seeds::{self, Invite, InviteIntent, Seed, Welcome},
+	seeds::{self, Invite, InviteIntent, LockedShare, Seed, Welcome},
 	user,
 	vault::LockedNode,
 	webauthn,
@@ -30,6 +30,7 @@ pub struct JsNet {
 	pub(crate) start_invite_intent: js_sys::Function,
 	pub(crate) get_invite_intent: js_sys::Function,
 	pub(crate) finish_invite_intents: js_sys::Function,
+	pub(crate) export_seeds_to_identity: js_sys::Function,
 	pub(crate) start_passkey_registration: js_sys::Function,
 	pub(crate) finish_passkey_registration: js_sys::Function,
 	pub(crate) start_passkey_auth: js_sys::Function,
@@ -52,6 +53,7 @@ impl JsNet {
 		start_invite_intent: js_sys::Function,
 		get_invite_intent: js_sys::Function,
 		finish_invite_intents: js_sys::Function,
+		export_seeds_to_identity: js_sys::Function,
 		lock_session: js_sys::Function,
 		unlock_session: js_sys::Function,
 		start_passkey_registration: js_sys::Function,
@@ -72,6 +74,7 @@ impl JsNet {
 			start_invite_intent,
 			get_invite_intent,
 			finish_invite_intents,
+			export_seeds_to_identity,
 			lock_session,
 			unlock_session,
 			start_passkey_registration,
@@ -270,6 +273,23 @@ impl Network for JsNet {
 		let json = JsValue::from(serialized);
 		let promise = self
 			.finish_invite_intents
+			.call1(&this, &json)
+			.map_err(|_| Error::JsViolated)?;
+		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);
+		js_future.await.map_err(|e| Error::NoNetwork(e))?;
+
+		Ok(())
+	}
+
+	async fn export_seeds_to_identity(
+		&self,
+		share: &LockedShare,
+	) -> Result<(), Error> {
+		let this = JsValue::NULL;
+		let serialized = serde_json::to_string(share).unwrap();
+		let json = JsValue::from(serialized);		
+		let promise = self
+			.export_seeds_to_identity
 			.call1(&this, &json)
 			.map_err(|_| Error::JsViolated)?;
 		let js_future = JsFuture::from(Promise::try_from(promise).map_err(|_| Error::JsViolated)?);

@@ -7,16 +7,7 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
 use web_sys::window;
 
 use crate::{
-	aes_gcm, encrypted,
-	id::Uid,
-	js_net::JsNet,
-	password_lock,
-	register::{self, LockedUser, NewUser},
-	seeds::{self, Invite, InviteIntent, Seed, Welcome, ROOT_ID},
-	session,
-	user::{self, User},
-	vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID},
-	webauthn,
+	aes_gcm, encrypted, id::Uid, identity, js_net::JsNet, password_lock, register::{self, LockedUser, NewUser}, seeds::{self, Invite, InviteIntent, LockedShare, Seed, Welcome, ROOT_ID}, session, user::{self, User}, vault::{self, LockedNode, NewNodeReq, Node, NO_PARENT_ID}, webauthn
 };
 
 const ID_ENVELOPE: &str = "senvelope";
@@ -164,6 +155,7 @@ pub(crate) trait Network {
 		&self,
 		intents: &[seeds::FinishInviteIntent],
 	) -> Result<(), Error>;
+	async fn export_seeds_to_identity(&self, share: &LockedShare) -> Result<(), Error>;
 	async fn get_user(&self, id: Uid) -> Result<LockedUser, Error>;
 	async fn get_master_key(&self, user_id: Uid) -> Result<encrypted::Encrypted, Error>;
 	async fn lock_session(&self, token_id: Uid, token: &Seed) -> Result<(), Error>;
@@ -926,6 +918,15 @@ impl Protocol {
 			.invite_with_seeds_for_email_and_pin(email, pin, None, None);
 
 		self.net.invite(&invite).await?;
+
+		Ok(())
+	}
+
+	pub async fn export_all_seeds_to_identity(&mut self, identity_json: &str) -> Result<(), Error> {
+		let receiver: identity::Public = serde_json::from_str(identity_json).map_err(|_| Error::BadJson)?;
+		let share = self.user.export_seeds_to_identity(None, None, &receiver);
+		
+		self.net.export_seeds_to_identity(&share).await?;
 
 		Ok(())
 	}
